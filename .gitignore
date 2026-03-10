@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Build
+.next/
+out/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Leo
+**/build/
+**/outputs/
+**/main.*.aleo
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

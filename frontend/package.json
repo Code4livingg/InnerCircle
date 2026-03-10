@@ -1,0 +1,36 @@
+{
+  "name": "onlyaleo-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@provablehq/aleo-types": "^0.3.0-alpha.3",
+    "@provablehq/aleo-wallet-adaptor-core": "^0.3.0-alpha.3",
+    "@provablehq/aleo-wallet-adaptor-fox": "^0.3.0-alpha.3",
+    "@provablehq/aleo-wallet-adaptor-leo": "^0.3.0-alpha.3",
+    "@provablehq/aleo-wallet-adaptor-puzzle": "^0.3.0-alpha.3",
+    "@provablehq/aleo-wallet-adaptor-react": "^0.3.0-alpha.3",
+    "@provablehq/aleo-wallet-adaptor-react-ui": "^0.3.0-alpha.3",
+    "@provablehq/aleo-wallet-adaptor-shield": "^0.3.0-alpha.3",
+    "@provablehq/aleo-wallet-adaptor-soter": "^0.3.0-alpha.3",
+    "@provablehq/aleo-wallet-standard": "^0.3.0-alpha.3",
+    "next": "^15.0.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "typescript": "^5.7.2"
+  },
+  "overrides": {
+    "nanoid": "^5.0.9",
+    "zod": "^3.23.8"
+  }
+}

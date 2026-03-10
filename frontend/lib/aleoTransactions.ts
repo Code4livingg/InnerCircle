@@ -1,0 +1,1961 @@
+import { Network, type TransactionOptions } from "@provablehq/aleo-types";
+import type { WalletContextState } from "@/lib/walletContext";
+import { fetchPublicBalance } from "./api";
+
+const MICROCREDITS_PER_ALEO = 1_000_000n;
+const DEFAULT_EXECUTION_FEE_ALEO = 0.25;
+const ALEO_EXPLORER_API =
+  process.env.NEXT_PUBLIC_ALEO_EXPLORER_API?.trim() || "https://api.explorer.provable.com/v1";
+const ALEO_EXPLORER_NETWORK =
+  process.env.NEXT_PUBLIC_ALEO_NETWORK?.trim().toLowerCase() === "mainnet" ? "mainnet" : "testnet";
+
+interface TransactionResult {
+  transactionId?: string;
+}
+
+interface ShieldAdapterTransactionOptions {
+  programId: string;
+  functionName: string;
+  inputs: string[];
+  fee?: string;
+  privateFee?: boolean;
+  recordIndices?: number[];
+}
+
+type CompatibleTransactionOptions = TransactionOptions | ShieldAdapterTransactionOptions;
+
+interface RequestTransactionLike {
+  requestTransaction?: (options: CompatibleTransactionOptions) => Promise<TransactionResult | undefined>;
+}
+
+interface ShieldRawExecutionRequestData {
+  programId: string;
+  functionName: string;
+  inputs: string[];
+  fee?: string;
+  privateFee?: true;
+}
+
+interface LegacyRawExecutionRequestData {
+  address: string;
+  chainId: string;
+  fee: number;
+  feePrivate: boolean;
+  recordIndices?: number[];
+  transitions: Array<{
+    program: string;
+    functionName: string;
+    inputs: string[];
+  }>;
+}
+
+interface RequestExecutionLike {
+  requestTransaction?: (
+    requestData: LegacyRawExecutionRequestData | ShieldRawExecutionRequestData,
+  ) => Promise<TransactionResult | undefined>;
+  requestExecution?: (
+    requestData: LegacyRawExecutionRequestData | ShieldRawExecutionRequestData,
+  ) => Promise<TransactionResult | undefined>;
+}
+
+interface TransactionHistoryLike {
+  requestTransactionHistory?: (program: string) => Promise<unknown>;
+}
+
+interface TransactionStatusLike {
+  transactionStatus?: (transactionId: string) => Promise<unknown>;
+}
+
+interface WalletExecutionResult {
+  accepted: boolean;
+  chainTxId?: string;
+  lastStatus?: string;
+}
+
+interface WalletHistoryRecord {
+  id?: string;
+  transactionId?: string;
+  requestId?: string;
+  ids: string[];
+}
+
+const getTransactionProgramId = (tx: CompatibleTransactionOptions): string =>
+  "programId" in tx && typeof tx.programId === "string" && tx.programId.trim().length > 0
+    ? tx.programId
+    : "program" in tx && typeof tx.program === "string"
+      ? tx.program
+      : "";
+
+const getTransactionFunctionName = (tx: CompatibleTransactionOptions): string =>
+  "functionName" in tx && typeof tx.functionName === "string" && tx.functionName.trim().length > 0
+    ? tx.functionName
+    : "function" in tx && typeof tx.function === "string"
+      ? tx.function
+      : "";
+
+const parseFeeLiteral = (fee: string): number | undefined => {
+  const match = fee.trim().match(/^(\d+)u64$/i);
+  if (!match) return undefined;
+  const parsed = Number(match[1]);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+};
+
+const toNumericTransactionFee = (fee: CompatibleTransactionOptions["fee"]): number | undefined => {
+  if (typeof fee === "number" && Number.isFinite(fee) && fee > 0) {
+    return fee;
+  }
+  if (typeof fee === "string") {
+    return parseFeeLiteral(fee);
+  }
+  return undefined;
+};
+
+const toShieldFeeLiteral = (fee: CompatibleTransactionOptions["fee"]): string | undefined => {
+  if (typeof fee === "string") {
+    return /^(\d+)u64$/i.test(fee.trim()) ? fee.trim() : undefined;
+  }
+  if (typeof fee === "number" && Number.isFinite(fee) && Number.isInteger(fee) && fee > 0) {
+    return `${fee}u64`;
+  }
+  return undefined;
+};
+
+const toLegacyTransactionOptions = (tx: CompatibleTransactionOptions): TransactionOptions => ({
+  program: getTransactionProgramId(tx),
+  function: getTransactionFunctionName(tx),
+  inputs: [...tx.inputs],
+  ...(typeof toNumericTransactionFee(tx.fee) === "number" ? { fee: toNumericTransactionFee(tx.fee) } : {}),
+  ...(typeof tx.privateFee === "boolean" ? { privateFee: tx.privateFee } : {}),
+  ...(Array.isArray(tx.recordIndices) && tx.recordIndices.length > 0 ? { recordIndices: tx.recordIndices } : {}),
+});
+
+const toShieldTransactionOptions = (tx: CompatibleTransactionOptions): ShieldAdapterTransactionOptions => ({
+  programId: getTransactionProgramId(tx),
+  functionName: getTransactionFunctionName(tx),
+  inputs: [...tx.inputs],
+  ...(typeof toShieldFeeLiteral(tx.fee) === "string" ? { fee: toShieldFeeLiteral(tx.fee) } : {}),
+  ...(typeof tx.privateFee === "boolean" ? { privateFee: tx.privateFee } : {}),
+  ...(Array.isArray(tx.recordIndices) && tx.recordIndices.length > 0 ? { recordIndices: tx.recordIndices } : {}),
+});
+
+const pickAnyOnChainTxId = (txs: WalletHistoryRecord[]): string | undefined => {
+  for (const tx of txs) {
+    for (const id of tx.ids) {
+      if (isOnChainAleoTxId(id)) {
+        return id;
+      }
+    }
+    if (tx.transactionId && isOnChainAleoTxId(tx.transactionId)) {
+      return tx.transactionId;
+    }
+    if (tx.id && isOnChainAleoTxId(tx.id)) {
+      return tx.id;
+    }
+  }
+
+  return undefined;
+};
+
+const getTransactionId = (result: unknown): string | undefined => {
+  if (!result || typeof result !== "object") return undefined;
+
+  const keys = [
+    "transactionId",
+    "transaction_id",
+    "txId",
+    "txid",
+    "id",
+    "eventId",
+    "event_id",
+    "hash",
+    "txHash",
+    "transactionHash",
+  ];
+  const root = result as Record<string, unknown>;
+
+  for (const key of keys) {
+    const value = root[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+
+  for (const nestedKey of ["transaction", "result", "data", "payload"]) {
+    const nested = root[nestedKey];
+    if (!nested || typeof nested !== "object") continue;
+    for (const key of keys) {
+      const value = (nested as Record<string, unknown>)[key];
+      if (typeof value === "string" && value.trim().length > 0) {
+        return value.trim();
+      }
+    }
+  }
+
+  return undefined;
+};
+
+const wait = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+const parseConfiguredFeeAleo = (): number => {
+  const raw =
+    process.env.NEXT_PUBLIC_EXECUTION_FEE_ALEO ??
+    process.env.NEXT_PUBLIC_TRANSACTION_FEE_ALEO;
+  if (!raw) return DEFAULT_EXECUTION_FEE_ALEO;
+
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_EXECUTION_FEE_ALEO;
+  }
+  return parsed;
+};
+
+const EXECUTION_FEE_ALEO = parseConfiguredFeeAleo();
+
+const parseLatestBlockHeight = (value: unknown, depth = 0): bigint | undefined => {
+  if (depth > 4 || value === null || value === undefined) return undefined;
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (/^\d+$/.test(trimmed)) {
+      return BigInt(trimmed);
+    }
+    return undefined;
+  }
+
+  if (typeof value === "number") {
+    if (Number.isFinite(value) && Number.isInteger(value) && value >= 0) {
+      return BigInt(value);
+    }
+    return undefined;
+  }
+
+  if (typeof value === "bigint") {
+    return value >= 0n ? value : undefined;
+  }
+
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    for (const key of ["height", "blockHeight", "block_height", "latestHeight", "latest_block_height"]) {
+      const parsed = parseLatestBlockHeight(record[key], depth + 1);
+      if (parsed !== undefined) {
+        return parsed;
+      }
+    }
+  }
+
+  return undefined;
+};
+
+const aleoToMicrocredits = (aleoAmount: number): bigint =>
+  BigInt(Math.round(aleoAmount * Number(MICROCREDITS_PER_ALEO)));
+
+const microcreditsToAleoString = (amount: bigint): string => {
+  const whole = amount / MICROCREDITS_PER_ALEO;
+  const fractional = (amount % MICROCREDITS_PER_ALEO).toString().padStart(6, "0").replace(/0+$/, "");
+  return fractional.length ? `${whole.toString()}.${fractional}` : whole.toString();
+};
+
+const MICROCREDIT_KEY_HINTS = new Set([
+  "value",
+  "plaintext",
+  "microcredits",
+  "balance",
+  "amount",
+  "account",
+]);
+
+const parseMicrocreditsValue = (
+  value: unknown,
+  depth = 0,
+  keyHint?: string,
+): bigint | undefined => {
+  if (depth > 8 || value === null || value === undefined) return undefined;
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+
+    const withU64 = /^([0-9]+)u64$/i.exec(trimmed);
+    if (withU64) return BigInt(withU64[1]);
+
+    if (/^[0-9]+$/.test(trimmed)) return BigInt(trimmed);
+
+    return undefined;
+  }
+
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value < 0 || !Number.isInteger(value)) return undefined;
+    return BigInt(value);
+  }
+
+  if (typeof value === "bigint") {
+    return value >= 0n ? value : undefined;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const parsed = parseMicrocreditsValue(item, depth + 1, keyHint);
+      if (parsed !== undefined) return parsed;
+    }
+    return undefined;
+  }
+
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+
+    for (const [key, nested] of entries) {
+      if (!MICROCREDIT_KEY_HINTS.has(key.toLowerCase())) continue;
+      const parsed = parseMicrocreditsValue(nested, depth + 1, key);
+      if (parsed !== undefined) return parsed;
+    }
+
+    // Some explorer responses wrap the literal under a single dynamic key.
+    if (entries.length === 1) {
+      const [key, nested] = entries[0];
+      const parsed = parseMicrocreditsValue(nested, depth + 1, key);
+      if (parsed !== undefined) return parsed;
+    }
+  }
+
+  return undefined;
+};
+
+const fetchExplorerPublicBalanceMicrocredits = async (address: string): Promise<bigint | undefined> => {
+  if (!address || !address.startsWith("aleo1")) {
+    return undefined;
+  }
+
+  const base = `${ALEO_EXPLORER_API}/${ALEO_EXPLORER_NETWORK}/program/credits.aleo/mapping/account`;
+  const urls = [
+    `${base}/${address}`,
+    `${base}/${encodeURIComponent(address)}`,
+  ];
+
+  for (const url of urls) {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) continue;
+
+      const contentType = response.headers.get("content-type") ?? "";
+      if (contentType.includes("application/json")) {
+        const payload: unknown = await response.json();
+        const parsed = parseMicrocreditsValue(payload);
+        if (parsed !== undefined) return parsed;
+      } else {
+        const payload = await response.text();
+        const parsed = parseMicrocreditsValue(payload);
+        if (parsed !== undefined) return parsed;
+      }
+    } catch {
+      // Best effort only; wallet execution can still proceed if explorer lookup fails.
+    }
+  }
+
+  return undefined;
+};
+
+const fetchKnownPublicBalanceMicrocredits = async (
+  address: string,
+): Promise<bigint | undefined> => {
+  if (!address || !address.startsWith("aleo1")) return undefined;
+
+  try {
+    const result = await fetchPublicBalance(address);
+    return BigInt(result.publicBalanceMicrocredits);
+  } catch {
+    // Backend lookup can fail transiently (startup/explorer hiccup); try direct explorer as fallback.
+    return await fetchExplorerPublicBalanceMicrocredits(address);
+  }
+};
+
+const isRetryablePayloadFormatError = (error: unknown): boolean => {
+  const message = (error as Error)?.message?.toLowerCase() ?? "";
+  return /invalid transaction payload|shield rejected the transaction payload|rejected the transaction payload|invalid aleo program|invalid_params|failed to parse input|invalid payload|could not create transaction/.test(
+    message,
+  );
+};
+
+export function isUuidLike(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+export function isOnChainAleoTxId(value: string | null | undefined): boolean {
+  if (!value) return false;
+  return /^at1[0-9a-z]{20,}$/i.test(value.trim());
+}
+
+const isTemporaryWalletTxId = (value: string | null | undefined): boolean =>
+  !!value && !isOnChainAleoTxId(value);
+
+function isUserRejectedError(error: unknown): boolean {
+  const message = (error as Error)?.message ?? "";
+  return /reject|denied|cancel|declined|not granted|user/i.test(message);
+}
+
+function isExtensionCrashedError(error: unknown): boolean {
+  const message = (error as Error)?.message ?? "";
+  return /receiving end does not exist|could not establish connection|extension context invalidated|no response/i.test(message);
+}
+
+const isNoSelectedAccountError = (error: unknown): boolean => {
+  const message = (error as Error)?.message ?? "";
+  return /no selected account/i.test(message);
+};
+
+const noSelectedAccountMessage = (): string =>
+  "No selected account in wallet. Open your wallet extension, select an account, reconnect, then retry.";
+
+export const toFieldLiteral = (value: string): string => (value.endsWith("field") ? value : `${value}field`);
+
+export const toFieldFromInteger = (value: bigint): string => `${value.toString()}field`;
+
+const isFieldLiteral = (value: string): boolean => /^\d+field$/i.test(value.trim());
+
+const isU64Literal = (value: string): boolean => /^\d+u64$/i.test(value.trim());
+
+export const toU64Literal = (microcredits: string | number | bigint | null | undefined): string => {
+  if (microcredits === null || microcredits === undefined || microcredits === "") {
+    return "0u64";
+  }
+
+  let numericValue: bigint;
+  if (typeof microcredits === "bigint") {
+    numericValue = microcredits;
+  } else if (typeof microcredits === "number") {
+    if (!Number.isFinite(microcredits) || !Number.isInteger(microcredits) || !Number.isSafeInteger(microcredits)) {
+      throw new Error("Microcredits number must be a safe integer.");
+    }
+    numericValue = BigInt(microcredits);
+  } else {
+    numericValue = BigInt(microcredits);
+  }
+
+  if (numericValue < 0n) {
+    throw new Error("Microcredits must be non-negative.");
+  }
+
+  return `${numericValue}u64`;
+};
+
+export const fetchLatestBlockHeight = async (): Promise<bigint> => {
+  const response = await fetch(`${ALEO_EXPLORER_API}/${ALEO_EXPLORER_NETWORK}/block/height/latest`);
+  if (!response.ok) {
+    throw new Error("Failed to fetch latest Aleo block height.");
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  const payload: unknown = contentType.includes("application/json")
+    ? await response.json()
+    : await response.text();
+  const height = parseLatestBlockHeight(payload);
+  if (height === undefined) {
+    throw new Error("Explorer returned an invalid latest block height.");
+  }
+
+  return height;
+};
+
+export const fetchLatestBlockHeightField = async (): Promise<string> =>
+  toFieldFromInteger(await fetchLatestBlockHeight());
+
+const validateLiteralInputs = (functionName: string, inputs: string[]): void => {
+  const normalized = inputs.map((value) => value.trim());
+
+  for (const value of normalized) {
+    if (!value || /undefined|null|nan/i.test(value)) {
+      throw new Error(`Invalid ${functionName} input literal: ${value || "(empty)"}`);
+    }
+  }
+
+  if (functionName === "pay_and_subscribe") {
+    if (normalized.length !== 3) {
+      throw new Error(`pay_and_subscribe expects 3 inputs, received ${normalized.length}.`);
+    }
+    if (!isFieldLiteral(normalized[0])) {
+      throw new Error(`pay_and_subscribe creator_id must be a field literal, got "${normalized[0]}".`);
+    }
+    if (!/^aleo1[0-9a-z]+$/i.test(normalized[1])) {
+      throw new Error(`pay_and_subscribe creator_address must be an aleo1 address, got "${normalized[1]}".`);
+    }
+    if (!isU64Literal(normalized[2])) {
+      throw new Error(`pay_and_subscribe amount must be a u64 literal, got "${normalized[2]}".`);
+    }
+  }
+
+  if (functionName === "pay_and_subscribe_v2") {
+    if (normalized.length !== 4) {
+      throw new Error(`pay_and_subscribe_v2 expects 4 inputs, received ${normalized.length}.`);
+    }
+    if (!isFieldLiteral(normalized[0])) {
+      throw new Error(`pay_and_subscribe_v2 creator_id must be a field literal, got "${normalized[0]}".`);
+    }
+    if (!/^aleo1[0-9a-z]+$/i.test(normalized[1])) {
+      throw new Error(`pay_and_subscribe_v2 creator_address must be an aleo1 address, got "${normalized[1]}".`);
+    }
+    if (!isU64Literal(normalized[2])) {
+      throw new Error(`pay_and_subscribe_v2 amount must be a u64 literal, got "${normalized[2]}".`);
+    }
+    if (!isFieldLiteral(normalized[3])) {
+      throw new Error(`pay_and_subscribe_v2 expiry must be a field literal, got "${normalized[3]}".`);
+    }
+  }
+
+  if (functionName === "prove_subscription_v2") {
+    if (normalized.length !== 3) {
+      throw new Error(`prove_subscription_v2 expects 3 inputs, received ${normalized.length}.`);
+    }
+    if (!isFieldLiteral(normalized[1])) {
+      throw new Error(`prove_subscription_v2 creator_id must be a field literal, got "${normalized[1]}".`);
+    }
+    if (!isFieldLiteral(normalized[2])) {
+      throw new Error(`prove_subscription_v2 current_height must be a field literal, got "${normalized[2]}".`);
+    }
+  }
+
+  if (functionName === "transfer_public") {
+    if (normalized.length !== 2) {
+      throw new Error(`transfer_public expects 2 inputs, received ${normalized.length}.`);
+    }
+    if (!/^aleo1[0-9a-z]+$/i.test(normalized[0])) {
+      throw new Error(`transfer_public recipient must be an aleo1 address, got "${normalized[0]}".`);
+    }
+    if (!isU64Literal(normalized[1])) {
+      throw new Error(`transfer_public amount must be a u64 literal, got "${normalized[1]}".`);
+    }
+  }
+};
+
+const getWalletAdapterName = (wallet: WalletContextState): string =>
+  String(wallet.wallet?.adapter?.name ?? "").trim().toLowerCase();
+
+const isShieldWallet = (wallet: WalletContextState): boolean =>
+  getWalletAdapterName(wallet).includes("shield");
+
+const isPuzzleWallet = (wallet: WalletContextState): boolean =>
+  getWalletAdapterName(wallet).includes("puzzle");
+
+const isLeoWallet = (wallet: WalletContextState): boolean =>
+  getWalletAdapterName(wallet).includes("leo");
+
+const withWalletDefaults = <T extends CompatibleTransactionOptions>(wallet: WalletContextState, tx: T): T => {
+  // Keep wallet defaults unless explicitly overridden by caller.
+  // For some wallet/account states, forcing private/public fee can make execution fail.
+  void wallet;
+  return tx;
+};
+
+const supportsRawExecutionApi = (wallet: WalletContextState): boolean => {
+  const name = getWalletAdapterName(wallet);
+  return name.includes("leo");
+};
+
+const preferRawExecutionApi = (wallet: WalletContextState): boolean => {
+  const name = getWalletAdapterName(wallet);
+  return name.includes("leo");
+};
+
+const toLeoChainId = (network: WalletContextState["network"]): string =>
+  network === Network.MAINNET ? "mainnet" : "testnetbeta";
+
+const getRawExecutionWallets = (wallet: WalletContextState): RequestExecutionLike[] => {
+  const out: RequestExecutionLike[] = [];
+  const seen = new Set<object>();
+
+  const add = (candidate: unknown): void => {
+    if (!candidate || typeof candidate !== "object") return;
+    const casted = candidate as RequestExecutionLike;
+    if (
+      typeof casted.requestExecution !== "function" &&
+      typeof casted.requestTransaction !== "function"
+    ) {
+      return;
+    }
+    const ref = candidate as object;
+    if (seen.has(ref)) return;
+    seen.add(ref);
+    out.push(casted);
+  };
+
+  const adapter = wallet.wallet?.adapter as Record<string, unknown> | undefined;
+  add(adapter?.["_leoWallet"]);
+  add(adapter?.["_foxWallet"]);
+  add(adapter?.["_shieldWallet"]);
+
+  if (typeof window !== "undefined") {
+    const win = window as unknown as {
+      leoWallet?: unknown;
+      leo?: unknown;
+      foxwallet?: { aleo?: unknown };
+      shieldwallet?: { aleo?: unknown };
+      shieldWallet?: unknown;
+      shield?: unknown;
+    };
+    add(win.leoWallet);
+    add(win.leo);
+    add(win.foxwallet?.aleo);
+    add(win.shieldwallet?.aleo);
+    add(win.shieldWallet);
+    add(win.shield);
+  }
+
+  return out;
+};
+
+const requestExecutionViaRawWallet = async (
+  wallet: WalletContextState,
+  tx: CompatibleTransactionOptions,
+): Promise<string | undefined> => {
+  if (!supportsRawExecutionApi(wallet)) {
+    return undefined;
+  }
+
+  const address = wallet.address;
+  if (!address) {
+    return undefined;
+  }
+
+  const rawFee =
+    toNumericTransactionFee(tx.fee) ?? 1_000;
+  const isShield = isShieldWallet(wallet);
+  const shieldFeeLiteral = toShieldFeeLiteral(tx.fee) ?? `${rawFee}u64`;
+  const programId = getTransactionProgramId(tx);
+  const functionName = getTransactionFunctionName(tx);
+
+  const requestData: LegacyRawExecutionRequestData | ShieldRawExecutionRequestData = isShield
+    ? {
+      programId,
+      functionName,
+      inputs: [...tx.inputs],
+      fee: shieldFeeLiteral,
+      ...(tx.privateFee === true ? { privateFee: true } : {}),
+    }
+    : {
+      address,
+      chainId: toLeoChainId(wallet.network),
+      fee: rawFee,
+      feePrivate: tx.privateFee ?? false,
+      ...(Array.isArray(tx.recordIndices) && tx.recordIndices.length > 0
+        ? { recordIndices: tx.recordIndices }
+        : {}),
+      transitions: [
+        {
+          program: programId,
+          functionName,
+          inputs: tx.inputs,
+        },
+      ],
+    };
+
+  if (process.env.NODE_ENV !== "production" && isShield) {
+    console.warn("[OnlyAleo][Shield] raw request payload", requestData);
+    console.warn("[OnlyAleo][Shield] raw request payload json", JSON.stringify(requestData));
+  }
+
+  for (const raw of getRawExecutionWallets(wallet)) {
+    if (typeof raw.requestTransaction === "function") {
+      const transactionResult = await raw.requestTransaction(requestData);
+      const txId = getTransactionId(transactionResult);
+      if (txId) {
+        return txId;
+      }
+    }
+
+    if (typeof raw.requestExecution === "function") {
+      const executionResult = await raw.requestExecution(requestData);
+      const txId = getTransactionId(executionResult);
+      if (txId) {
+        return txId;
+      }
+    }
+  }
+
+  return undefined;
+};
+
+const toWalletTransactionOptions = (
+  wallet: WalletContextState,
+  tx: CompatibleTransactionOptions,
+): TransactionOptions => {
+  void wallet;
+  return toLegacyTransactionOptions(tx);
+};
+
+export const requestTransactionCompat = async (
+  wallet: WalletContextState,
+  tx: CompatibleTransactionOptions,
+): Promise<string> => {
+  const txWithDefaults = toWalletTransactionOptions(wallet, withWalletDefaults(wallet, tx));
+  const executeViaAdapter = async (): Promise<string> => {
+    const result = await wallet.executeTransaction(txWithDefaults as TransactionOptions);
+    const transactionId = getTransactionId(result);
+    if (!transactionId) throw new Error("Wallet did not return a transaction ID.");
+    return transactionId;
+  };
+
+  const contextRequest = (wallet as WalletContextState & RequestTransactionLike).requestTransaction;
+  const adapterRequest = (wallet.wallet?.adapter as RequestTransactionLike | undefined)?.requestTransaction;
+  try {
+    if (preferRawExecutionApi(wallet)) {
+      const rawTxId = await requestExecutionViaRawWallet(wallet, txWithDefaults);
+      if (rawTxId) {
+        return rawTxId;
+      }
+    }
+
+    if (isShieldWallet(wallet)) {
+      return await executeViaAdapter();
+    }
+
+    if (typeof contextRequest === "function") {
+      const result = await contextRequest(txWithDefaults);
+      const transactionId = getTransactionId(result);
+      if (!transactionId) throw new Error("Wallet did not return a transaction ID.");
+      return transactionId;
+    }
+
+    if (typeof adapterRequest === "function") {
+      const result = await adapterRequest(txWithDefaults);
+      const transactionId = getTransactionId(result);
+      if (!transactionId) throw new Error("Wallet did not return a transaction ID.");
+      return transactionId;
+    }
+
+    return await executeViaAdapter();
+  } catch (error) {
+    if (isNoSelectedAccountError(error)) {
+      await wallet.disconnect().catch(() => undefined);
+      throw new Error(noSelectedAccountMessage());
+    }
+    if (isExtensionCrashedError(error)) {
+      throw new Error(
+        "Lost connection to Shield wallet. Please refresh the page, reconnect your wallet, then retry.",
+      );
+    }
+    if (isUserRejectedError(error)) {
+      throw error;
+    }
+
+    const message = (error as Error)?.message?.toLowerCase() ?? "";
+
+    if (
+      supportsRawExecutionApi(wallet) &&
+      !preferRawExecutionApi(wallet)
+    ) {
+      try {
+        const rawTxId = await requestExecutionViaRawWallet(wallet, txWithDefaults);
+        if (rawTxId) {
+          return rawTxId;
+        }
+      } catch (rawError) {
+        if (isNoSelectedAccountError(rawError)) {
+          await wallet.disconnect().catch(() => undefined);
+          throw new Error(noSelectedAccountMessage());
+        }
+        if (isExtensionCrashedError(rawError)) {
+          throw new Error(
+            "Lost connection to Shield wallet. Please refresh the page, reconnect your wallet, then retry.",
+          );
+        }
+        if (isUserRejectedError(rawError)) {
+          throw rawError;
+        }
+
+        const primary = (error as Error)?.message ?? "Wallet executeTransaction failed.";
+        const secondary = (rawError as Error)?.message ?? "Raw requestExecution failed.";
+        throw new Error(`${primary} | ${secondary}`);
+      }
+    }
+
+    if (
+      isShieldWallet(wallet) &&
+      /invalid_params|invalid transaction payload|could not create transaction/.test(message)
+    ) {
+      throw new Error(
+        'Shield rejected the transaction payload. Most likely causes: stale dApp program permissions in Shield, or the deployed testnet program signature does not match the frontend call.',
+      );
+    }
+    throw error;
+  }
+};
+
+export type FeePreference = "auto" | "aleo_first" | "microcredits_first";
+
+interface ExecuteCreditsTransferInput {
+  wallet: WalletContextState;
+  recipientAddress: string;
+  amountMicrocredits: string | number | bigint | null | undefined;
+  feeAleo?: number;
+  feePreference?: FeePreference;
+}
+
+const buildFeeCandidates = (
+  wallet: WalletContextState,
+  feeAleo: number,
+  feeMicrocredits?: number,
+  feePreference: FeePreference = "auto",
+): number[] => {
+  if (isShieldWallet(wallet)) {
+    return Array.from(
+      new Set(
+        [feeMicrocredits, Number.isInteger(feeAleo) ? feeAleo : undefined].filter(
+          (value): value is number =>
+            typeof value === "number" &&
+            Number.isFinite(value) &&
+            Number.isInteger(value) &&
+            value > 0,
+        ),
+      ),
+    );
+  }
+
+  const orderedCandidates =
+    feePreference === "aleo_first"
+      ? [feeAleo, feeMicrocredits]
+      : feePreference === "microcredits_first"
+        ? [feeMicrocredits, feeAleo]
+        : isPuzzleWallet(wallet)
+          ? [feeMicrocredits, feeAleo]
+          : isShieldWallet(wallet)
+            ? [feeAleo, feeMicrocredits]
+            : [feeAleo, feeMicrocredits];
+
+  return Array.from(
+    new Set(
+      orderedCandidates.filter(
+        (value): value is number =>
+          typeof value === "number" && Number.isFinite(value) && value > 0,
+      ),
+    ),
+  );
+};
+
+const buildShieldPaymentFeeCandidates = (
+  baseFeeMicrocredits: number,
+  feePreference: FeePreference = "auto",
+): number[] => {
+  const tiers = Array.from(
+    new Set(
+      [
+        baseFeeMicrocredits,
+        Math.max(baseFeeMicrocredits * 2, 500_000),
+        Math.max(baseFeeMicrocredits * 10, 2_500_000),
+        Math.max(baseFeeMicrocredits * 20, 5_000_000),
+      ].filter(
+        (value): value is number =>
+          typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value > 0,
+      ),
+    ),
+  );
+
+  if (feePreference === "aleo_first") {
+    return [...tiers].reverse();
+  }
+
+  return tiers;
+};
+
+const arityPreference = new Map<string, 1 | 2>();
+
+const isAcceptedWalletStatus = (status: string): boolean =>
+  /accepted|confirmed|finalized|success|mined/i.test(status);
+
+const isFailedWalletStatus = (status: string): boolean =>
+  /failed|reject|error|aborted|cancel|denied|invalid/i.test(status);
+
+const getStringByKey = (value: unknown, keys: string[]): string | undefined => {
+  if (!value || typeof value !== "object") return undefined;
+
+  const obj = value as Record<string, unknown>;
+  for (const key of keys) {
+    const maybe = obj[key];
+    if (typeof maybe === "string" && maybe.trim().length > 0) {
+      return maybe.trim();
+    }
+  }
+
+  return undefined;
+};
+
+const collectStringsByKeysDeep = (
+  value: unknown,
+  keys: string[],
+  depth = 0,
+): string[] => {
+  if (depth > 4 || !value || typeof value !== "object") {
+    return [];
+  }
+
+  const out: string[] = [];
+  const obj = value as Record<string, unknown>;
+
+  for (const key of keys) {
+    const direct = obj[key];
+    if (typeof direct === "string" && direct.trim().length > 0) {
+      out.push(direct.trim());
+    }
+  }
+
+  for (const nestedValue of Object.values(obj)) {
+    if (nestedValue && typeof nestedValue === "object") {
+      out.push(...collectStringsByKeysDeep(nestedValue, keys, depth + 1));
+    }
+  }
+
+  return out;
+};
+
+const getRawWalletApis = (wallet: WalletContextState): Array<TransactionHistoryLike & TransactionStatusLike> => {
+  const apis: Array<TransactionHistoryLike & TransactionStatusLike> = [];
+  const seen = new Set<object>();
+
+  const addCandidate = (candidate: unknown): void => {
+    if (!candidate || typeof candidate !== "object") return;
+    const casted = candidate as TransactionHistoryLike & TransactionStatusLike;
+
+    const hasHistory = typeof casted.requestTransactionHistory === "function";
+    const hasStatus = typeof casted.transactionStatus === "function";
+    if (!hasHistory && !hasStatus) return;
+
+    const objectRef = candidate as object;
+    if (seen.has(objectRef)) return;
+    seen.add(objectRef);
+    apis.push(casted);
+  };
+
+  const adapter = wallet.wallet?.adapter as Record<string, unknown> | undefined;
+  addCandidate(adapter?.["_leoWallet"]);
+  addCandidate(adapter?.["_foxWallet"]);
+  addCandidate(adapter?.["_shieldWallet"]);
+  addCandidate(adapter?.["_puzzleWallet"]);
+
+  if (typeof window !== "undefined") {
+    const win = window as unknown as {
+      leoWallet?: unknown;
+      leo?: unknown;
+      foxwallet?: { aleo?: unknown };
+      shieldwallet?: { aleo?: unknown };
+      shieldWallet?: unknown;
+      shield?: unknown;
+      puzzle?: unknown;
+    };
+    addCandidate(win.leoWallet);
+    addCandidate(win.leo);
+    addCandidate(win.foxwallet?.aleo);
+    addCandidate(win.shieldwallet?.aleo);
+    addCandidate(win.shieldWallet);
+    addCandidate(win.shield);
+    addCandidate(win.puzzle);
+  }
+
+  return apis;
+};
+
+const normalizeStatus = (value: unknown): string => {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (!text) return "";
+  if (text === "finalized") return "accepted";
+  if (text === "completed") return "pending";
+  return text;
+};
+
+const extractErrorMessage = (value: unknown): string | undefined => {
+  const topLevel = getStringByKey(value, ["error", "message", "reason", "details"]);
+  if (topLevel) return topLevel;
+
+  const deep = collectStringsByKeysDeep(value, ["error", "message", "reason", "details"]);
+  return deep[0];
+};
+
+const extractTxIdCandidate = (value: unknown): string | undefined => {
+  const keys = [
+    "transactionId",
+    "transaction_id",
+    "txId",
+    "txid",
+    "id",
+    "hash",
+    "txHash",
+    "transactionHash",
+    "aleoTransactionId",
+    "eventId",
+    "event_id",
+  ];
+  const top = keys
+    .map((key) => getStringByKey(value, [key]))
+    .filter((candidate): candidate is string => Boolean(candidate));
+  const deep = collectStringsByKeysDeep(value, keys);
+  const merged = uniqueStrings([...top, ...deep]);
+  const onChain = merged.find((candidate) => isOnChainAleoTxId(candidate));
+  return onChain ?? merged[0];
+};
+
+const extractStatusCandidate = (value: unknown): string | undefined => {
+  const topLevel = getStringByKey(value, [
+    "status",
+    "state",
+    "txStatus",
+    "transactionStatus",
+  ]);
+  if (topLevel) return topLevel;
+
+  const deep = collectStringsByKeysDeep(value, [
+    "status",
+    "state",
+    "txStatus",
+    "transactionStatus",
+  ]);
+  return deep[0];
+};
+
+const readRawWalletStatus = async (
+  wallet: WalletContextState,
+  requestTxId: string,
+): Promise<{ status?: string; transactionId?: string; error?: string }> => {
+  const rawApis = getRawWalletApis(wallet);
+  for (const api of rawApis) {
+    if (typeof api.transactionStatus !== "function") continue;
+    try {
+      const response = await api.transactionStatus(requestTxId);
+      const status = normalizeStatus(extractStatusCandidate(response));
+      const transactionId = extractTxIdCandidate(response);
+      const error = extractErrorMessage(response);
+      if (status || transactionId || error) {
+        return { status, transactionId, error };
+      }
+    } catch {
+      // Ignore and continue.
+    }
+  }
+
+  return {};
+};
+
+export const waitForWalletExecution = async (
+  wallet: WalletContextState,
+  transactionId: string,
+  options?: { attempts?: number; delayMs?: number; programId?: string },
+): Promise<WalletExecutionResult> => {
+  const attempts = options?.attempts ?? 45;
+  const delayMs = options?.delayMs ?? 1500;
+  let chainTxId: string | undefined;
+  let lastStatus: string | undefined;
+  let noStatusCounter = 0;
+  let statusLookupErrorCounter = 0;
+  const shouldDeferToExplorer =
+    isShieldWallet(wallet) &&
+    isTemporaryWalletTxId(transactionId);
+
+  const tryHistoryFallback = async (): Promise<WalletExecutionResult | undefined> => {
+    if (chainTxId || !isTemporaryWalletTxId(transactionId)) {
+      return undefined;
+    }
+    const likelyShieldTempId = /^shield[._-]/i.test(transactionId) || isShieldWallet(wallet);
+    if (!likelyShieldTempId) {
+      return undefined;
+    }
+
+    try {
+      const resolvedId = await resolveChainTxIdFromHistory(
+        wallet,
+        transactionId,
+        options?.programId,
+      );
+      if (resolvedId && isOnChainAleoTxId(resolvedId)) {
+        return {
+          accepted: true,
+          chainTxId: resolvedId,
+          lastStatus: "accepted",
+        };
+      }
+    } catch {
+      // History lookup failures should not mask the original status result.
+    }
+
+    return undefined;
+  };
+
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      const responseRaw = await wallet.transactionStatus(transactionId);
+      // The adapter returns a structured object: { status, transactionId, error }
+      const response = (responseRaw as unknown) as Record<string, unknown> | undefined;
+      let status = normalizeStatus(response?.status ?? extractStatusCandidate(responseRaw));
+      let errorMessage = (response?.error as string | undefined) ?? extractErrorMessage(responseRaw);
+      const txIdFromStatus =
+        (response?.transactionId as string | undefined) ??
+        extractTxIdCandidate(responseRaw);
+      if (txIdFromStatus) {
+        chainTxId = txIdFromStatus;
+      }
+
+      // Leo/Fox adapters currently strip transactionId/error from response.
+      if (!status || !txIdFromStatus) {
+        const rawStatus = await readRawWalletStatus(wallet, transactionId);
+        if (!status && rawStatus.status) {
+          status = rawStatus.status;
+        }
+        if (!chainTxId && rawStatus.transactionId) {
+          chainTxId = rawStatus.transactionId;
+        }
+        if (!errorMessage && rawStatus.error) {
+          errorMessage = rawStatus.error;
+        }
+      }
+
+      if (!status) {
+        noStatusCounter += 1;
+        if (isTemporaryWalletTxId(transactionId) && noStatusCounter >= 12) {
+          if (!shouldDeferToExplorer) {
+            const resolved = await tryHistoryFallback();
+            if (resolved) {
+              return resolved;
+            }
+          } else {
+            return {
+              accepted: true,
+              chainTxId,
+              lastStatus: lastStatus ?? "submitted",
+            };
+          }
+          return {
+            accepted: false,
+            chainTxId,
+            lastStatus,
+          };
+        }
+        await wait(delayMs);
+        continue;
+      }
+      noStatusCounter = 0;
+      lastStatus = status;
+
+      if (isAcceptedWalletStatus(status)) {
+        return {
+          accepted: true,
+          chainTxId,
+          lastStatus: status,
+        };
+      }
+
+      if (isFailedWalletStatus(status)) {
+        if (shouldDeferToExplorer) {
+          await wait(delayMs);
+          continue;
+        }
+
+        const pendingRequestId =
+          isTemporaryWalletTxId(transactionId) &&
+          (!chainTxId || isTemporaryWalletTxId(chainTxId));
+
+        // Some adapters transiently return "failed" for request IDs before the explorer tx is available.
+        if (pendingRequestId) {
+          await wait(delayMs);
+          continue;
+        }
+
+        const rejectionHint =
+          !errorMessage && isShieldWallet(wallet)
+            ? " Shield reported a rejected status."
+            : "";
+        throw new Error(`Wallet transaction failed: ${errorMessage ?? `status "${status}"`}.${rejectionHint}`);
+      }
+    } catch (error) {
+      const message = (error as Error)?.message ?? "";
+      if (isExtensionCrashedError(error)) {
+        throw new Error(
+          "Lost connection to Shield wallet (extension service worker stopped). Please refresh the page and reconnect your wallet, then try again.",
+        );
+      }
+      if (isUserRejectedError(error) || /wallet transaction failed|wallet reported transaction status/i.test(message)) {
+        throw error;
+      }
+
+      // Some adapters throw while still exposing data on raw wallet APIs.
+      const rawStatus = await readRawWalletStatus(wallet, transactionId);
+      if (rawStatus.transactionId) {
+        chainTxId = rawStatus.transactionId;
+      }
+      if (rawStatus.status) {
+        const status = normalizeStatus(rawStatus.status);
+        lastStatus = status;
+        noStatusCounter = 0;
+        statusLookupErrorCounter = 0;
+
+        if (isAcceptedWalletStatus(status)) {
+          return {
+            accepted: true,
+            chainTxId,
+            lastStatus: status,
+          };
+        }
+
+        if (isFailedWalletStatus(status)) {
+          if (shouldDeferToExplorer) {
+            await wait(delayMs);
+            continue;
+          }
+
+          const pendingRequestId =
+            isTemporaryWalletTxId(transactionId) &&
+            (!chainTxId || isTemporaryWalletTxId(chainTxId));
+          if (!pendingRequestId) {
+            const rejectionHint =
+              !rawStatus.error && isShieldWallet(wallet)
+                ? " Shield reported a rejected status."
+                : "";
+            throw new Error(`Wallet transaction failed: ${rawStatus.error ?? `status "${status}"`}.${rejectionHint}`);
+          }
+        }
+      } else {
+        statusLookupErrorCounter += 1;
+        if (isTemporaryWalletTxId(transactionId) && statusLookupErrorCounter >= 12) {
+          if (!shouldDeferToExplorer) {
+            const resolved = await tryHistoryFallback();
+            if (resolved) {
+              return resolved;
+            }
+          } else {
+            return {
+              accepted: true,
+              chainTxId,
+              lastStatus: lastStatus ?? "submitted",
+            };
+          }
+          return {
+            accepted: false,
+            chainTxId,
+            lastStatus,
+          };
+        }
+      }
+      // Ignore transient status lookup errors and let backend verification retry handle finality.
+    }
+
+    // Every 3rd attempt, also verify directly against the Aleo explorer.
+    if (i > 0 && i % 3 === 0) {
+      const explorerTxId =
+        (chainTxId && isOnChainAleoTxId(chainTxId) ? chainTxId : undefined) ??
+        (isOnChainAleoTxId(transactionId) ? transactionId : undefined);
+
+      if (explorerTxId && !/^demo/i.test(explorerTxId)) {
+        try {
+          const explorerRes = await fetch(
+            `${ALEO_EXPLORER_API}/${ALEO_EXPLORER_NETWORK}/transaction/${explorerTxId}`,
+          );
+          if (explorerRes.ok) {
+            return {
+              accepted: true,
+              chainTxId: explorerTxId,
+              lastStatus: lastStatus ?? "accepted",
+            };
+          }
+        } catch {
+          // Ignore explorer failures and continue polling.
+        }
+      }
+    }
+
+    await wait(delayMs);
+  }
+
+  if (!shouldDeferToExplorer) {
+    const resolved = await tryHistoryFallback();
+    if (resolved) {
+      return resolved;
+    }
+  } else {
+    return {
+      accepted: true,
+      chainTxId,
+      lastStatus: lastStatus ?? "submitted",
+    };
+  }
+
+  return {
+    accepted: false,
+    chainTxId,
+    lastStatus,
+  };
+};
+
+const pickResolvedTxId = (
+  requestId: string,
+  txs: WalletHistoryRecord[],
+): string | undefined => {
+  for (const tx of txs) {
+    if (!tx.ids.includes(requestId)) continue;
+    const ids = tx.ids.filter((id) => id !== requestId);
+
+    for (const id of ids) {
+      if (isOnChainAleoTxId(id)) {
+        return id;
+      }
+    }
+
+    for (const id of ids) {
+      if (!isUuidLike(id)) {
+        return id;
+      }
+    }
+
+    if (
+      tx.transactionId &&
+      tx.transactionId !== requestId &&
+      isOnChainAleoTxId(tx.transactionId)
+    ) {
+      return tx.transactionId;
+    }
+    if (tx.id && tx.id !== requestId && isOnChainAleoTxId(tx.id)) {
+      return tx.id;
+    }
+  }
+
+  return undefined;
+};
+
+const uniqueStrings = (values: string[]): string[] => {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const normalized = value.trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+};
+
+const DEFAULT_HISTORY_PROGRAM_IDS = [
+  "credits.aleo",
+  "creator_reg_v2_xwnxp.aleo",
+];
+
+export const resolveChainTxIdFromHistory = async (
+  wallet: WalletContextState,
+  requestTxId: string,
+  programId?: string,
+  options?: { attempts?: number; delayMs?: number },
+): Promise<string | undefined> => {
+  if (isOnChainAleoTxId(requestTxId)) {
+    return requestTxId;
+  }
+
+  const attempts = options?.attempts ?? 12;
+  const delayMs = options?.delayMs ?? 1500;
+  const candidatePrograms = uniqueStrings([
+    ...(programId ? [programId] : []),
+    ...DEFAULT_HISTORY_PROGRAM_IDS,
+  ]);
+
+  for (let i = 0; i < attempts; i += 1) {
+    for (const candidateProgram of candidatePrograms) {
+      const responses = await readHistoryResponses(wallet, candidateProgram);
+      for (const response of responses) {
+        const records = getHistoryRecordsFromResponse(response);
+        if (records.length === 0) continue;
+
+        const resolved = pickResolvedTxId(requestTxId, records);
+        if (resolved && isOnChainAleoTxId(resolved)) {
+          return resolved;
+        }
+
+        if (isTemporaryWalletTxId(requestTxId)) {
+          const fallback = pickAnyOnChainTxId(records);
+          if (fallback && isOnChainAleoTxId(fallback)) {
+            return fallback;
+          }
+        }
+      }
+    }
+
+    await wait(delayMs);
+  }
+
+  return undefined;
+};
+
+const extractHistoryArrays = (value: unknown, depth = 0): unknown[] => {
+  if (depth > 3 || !value || typeof value !== "object") {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  const obj = value as Record<string, unknown>;
+  const direct = obj["transactions"];
+  if (Array.isArray(direct)) {
+    return direct;
+  }
+
+  const events = obj["events"];
+  if (Array.isArray(events)) {
+    return events;
+  }
+
+  const txs = obj["txs"];
+  if (Array.isArray(txs)) {
+    return txs;
+  }
+
+  const history = obj["history"];
+  if (Array.isArray(history)) {
+    return history;
+  }
+
+  const items = obj["items"];
+  if (Array.isArray(items)) {
+    return items;
+  }
+
+  const data = obj["data"];
+  if (data) {
+    const nested = extractHistoryArrays(data, depth + 1);
+    if (nested.length > 0) {
+      return nested;
+    }
+  }
+
+  return [];
+};
+
+const extractIdsFromRecord = (value: unknown, depth = 0): string[] => {
+  if (depth > 3 || !value || typeof value !== "object") {
+    return [];
+  }
+
+  const obj = value as Record<string, unknown>;
+  const keys = [
+    "id",
+    "transactionId",
+    "txId",
+    "requestId",
+    "eventId",
+    "tempTransactionId",
+    "temp_tx_id",
+    "requestTxId",
+    "request_tx_id",
+    "transaction_id",
+    "request_id",
+    "txid",
+    "txHash",
+    "transactionHash",
+    "hash",
+  ];
+  const direct = keys
+    .map((key) => obj[key])
+    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
+
+  const nestedKeys = ["transaction", "event", "result", "metadata", "payload"];
+  const nested = nestedKeys.flatMap((key) => extractIdsFromRecord(obj[key], depth + 1));
+  return uniqueStrings([...direct, ...nested]);
+};
+
+const toHistoryRecord = (value: unknown): WalletHistoryRecord => {
+  const id = getStringByKey(value, ["id"]);
+  const transactionId = getStringByKey(value, ["transactionId", "txId", "transaction_id"]);
+  const requestId = getStringByKey(value, [
+    "requestId",
+    "request_id",
+    "eventId",
+    "tempTransactionId",
+    "temp_tx_id",
+    "requestTxId",
+    "request_tx_id",
+  ]);
+  const ids = uniqueStrings([
+    ...extractIdsFromRecord(value),
+    ...(id ? [id] : []),
+    ...(transactionId ? [transactionId] : []),
+    ...(requestId ? [requestId] : []),
+  ]);
+
+  return {
+    id,
+    transactionId,
+    requestId,
+    ids,
+  };
+};
+
+const getHistoryRecordsFromResponse = (value: unknown): WalletHistoryRecord[] => {
+  const txs = extractHistoryArrays(value);
+  if (!Array.isArray(txs) || txs.length === 0) {
+    return [];
+  }
+
+  return txs.map((tx) => toHistoryRecord(tx));
+};
+
+const readHistoryResponses = async (wallet: WalletContextState, programId: string): Promise<unknown[]> => {
+  if (isShieldWallet(wallet)) {
+    return [];
+  }
+
+  const responses: unknown[] = [];
+
+  const contextHistoryApi = wallet as WalletContextState & TransactionHistoryLike;
+  if (typeof contextHistoryApi.requestTransactionHistory === "function") {
+    try {
+      responses.push(await contextHistoryApi.requestTransactionHistory(programId));
+    } catch {
+      // Ignore context API failures.
+    }
+  }
+
+  for (const api of getRawWalletApis(wallet)) {
+    if (typeof api.requestTransactionHistory !== "function") continue;
+    try {
+      responses.push(await api.requestTransactionHistory(programId));
+    } catch {
+      // Ignore wallet-specific API failures.
+    }
+  }
+
+  return responses;
+};
+
+export const resolveExplorerTxId = async (
+  wallet: WalletContextState,
+  programId: string,
+  requestTxId: string,
+  options?: { attempts?: number; delayMs?: number; statusTxId?: string },
+): Promise<string> => {
+  const statusTxId = options?.statusTxId;
+  if (statusTxId && isOnChainAleoTxId(statusTxId)) {
+    return statusTxId;
+  }
+
+  if (isOnChainAleoTxId(requestTxId)) {
+    return requestTxId;
+  }
+
+  const attempts = options?.attempts ?? 45;
+  const delayMs = options?.delayMs ?? 2000;
+  let noHistoryCounter = 0;
+
+  for (let i = 0; i < attempts; i += 1) {
+    const historyResponses = await readHistoryResponses(wallet, programId);
+    let foundRecords = false;
+    for (const history of historyResponses) {
+      const records = getHistoryRecordsFromResponse(history);
+      if (records.length === 0) continue;
+      foundRecords = true;
+
+      const resolved = pickResolvedTxId(requestTxId, records);
+      if (resolved && isOnChainAleoTxId(resolved)) {
+        return resolved;
+      }
+
+      // Some wallets do not include the temporary request id in history entries.
+      // For program-scoped history, the newest on-chain entry is still a useful fallback.
+      if (isTemporaryWalletTxId(requestTxId)) {
+        const fallback = pickAnyOnChainTxId(records);
+        if (fallback && isOnChainAleoTxId(fallback)) {
+          return fallback;
+        }
+      }
+    }
+
+    if (!foundRecords) {
+      noHistoryCounter += 1;
+      if (isTemporaryWalletTxId(requestTxId) && noHistoryCounter >= 12) {
+        return options?.statusTxId ?? requestTxId;
+      }
+    } else {
+      noHistoryCounter = 0;
+    }
+
+    await wait(delayMs);
+  }
+
+  return options?.statusTxId ?? requestTxId;
+};
+
+export const waitForOnChainTransactionId = async (
+  wallet: WalletContextState,
+  requestTxId: string,
+  programId: string,
+  options?: { attempts?: number; delayMs?: number },
+): Promise<string> => {
+  const execution = await waitForWalletExecution(wallet, requestTxId, {
+    attempts: options?.attempts,
+    delayMs: options?.delayMs,
+    programId,
+  });
+
+  if (!execution.accepted && !isOnChainAleoTxId(execution.chainTxId)) {
+    throw new Error("Transaction was not confirmed. It may have been rejected by the wallet.");
+  }
+
+  const resolved = await resolveExplorerTxId(wallet, programId, requestTxId, {
+    statusTxId: execution.chainTxId,
+    attempts: options?.attempts,
+    delayMs: options?.delayMs,
+  });
+
+  if (!isOnChainAleoTxId(resolved)) {
+    throw new Error(
+      "Transaction was submitted, but the on-chain tx id is not available yet. Wait for finalization and retry.",
+    );
+  }
+
+  return resolved;
+};
+
+/**
+ * Polls the Aleo testnet explorer API directly to find the real on-chain
+ * at1... transaction ID. Used as a fallback when the wallet's own history
+ * API cannot resolve a temporary ID (e.g. shield_*, puzzle-uuid, etc.).
+ *
+ * Strategy: query the latest transactions for the given program and return
+ * the most recent one. Since the user just submitted, it should be first.
+ */
+const shouldStopExplorerProgramPolling = async (response: Response): Promise<boolean> => {
+  if (response.ok) {
+    return false;
+  }
+
+  if (response.status < 400 || response.status >= 500) {
+    return false;
+  }
+
+  try {
+    const payload: unknown = await response.clone().json();
+    const message = getStringByKey(payload, ["message", "error"])?.toLowerCase() ?? "";
+    return /invalid edition number|cannot get /i.test(message);
+  } catch {
+    try {
+      const text = (await response.clone().text()).toLowerCase();
+      return /invalid edition number|cannot get /i.test(text);
+    } catch {
+      return false;
+    }
+  }
+};
+
+export const pollExplorerForTxId = async (
+  programId: string,
+  options?: { attempts?: number; delayMs?: number },
+): Promise<string | undefined> => {
+  const attempts = options?.attempts ?? 60;
+  const delayMs = options?.delayMs ?? 3000;
+
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      const url = `${ALEO_EXPLORER_API}/${ALEO_EXPLORER_NETWORK}/program/${programId}/transactions?limit=5`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        if (await shouldStopExplorerProgramPolling(response)) {
+          if (process.env.NODE_ENV !== "production") {
+            console.warn("[OnlyAleo] explorer program transaction polling unsupported", {
+              programId,
+              status: response.status,
+              url,
+            });
+          }
+          return undefined;
+        }
+        await wait(delayMs);
+        continue;
+      }
+
+      const data: unknown = await response.json();
+      if (!data || !Array.isArray(data)) {
+        await wait(delayMs);
+        continue;
+      }
+
+      // Each entry has a transaction.id field that is the real on-chain at1... ID
+      for (const entry of data as unknown[]) {
+        const rec = entry as Record<string, unknown>;
+
+        // Try top-level id
+        const topId = getStringByKey(rec, ["id", "transactionId", "transaction_id", "txId", "txid"]);
+        if (topId && isOnChainAleoTxId(topId)) return topId;
+
+        // Try nested transaction object
+        const txObj = rec["transaction"];
+        if (txObj && typeof txObj === "object") {
+          const nestedId = getStringByKey(txObj as Record<string, unknown>, ["id", "transactionId", "transaction_id"]);
+          if (nestedId && isOnChainAleoTxId(nestedId)) return nestedId;
+        }
+
+        // Deep scan all string fields
+        const deep = collectStringsByKeysDeep(rec, ["id", "transactionId", "transaction_id", "txId", "txid"]);
+        const onChain = deep.find((v) => isOnChainAleoTxId(v));
+        if (onChain) return onChain;
+      }
+    } catch {
+      // Network error — keep retrying
+    }
+
+    await wait(delayMs);
+  }
+
+  return undefined;
+};
+
+interface ExecuteProgramTxInput {
+  wallet: WalletContextState;
+  programId: string;
+  functionName: string;
+  inputs: string[];
+  feeAleo?: number;
+  privateFee?: boolean;
+  feePreference?: FeePreference;
+}
+
+export const executeProgramTransaction = async ({
+  wallet,
+  programId,
+  functionName,
+  inputs,
+  feeAleo = EXECUTION_FEE_ALEO,
+  privateFee = false,
+  feePreference = "auto",
+}: ExecuteProgramTxInput): Promise<string> => {
+  if (!wallet.address || !wallet.address.startsWith("aleo1")) {
+    throw new Error("Wallet is not connected to a valid Aleo address.");
+  }
+
+  const adapterName = getWalletAdapterName(wallet);
+  const isShield = adapterName.toLowerCase().includes("shield");
+  const executionFeeMicrocredits = aleoToMicrocredits(feeAleo);
+  const feeMicrocreditsNumber =
+    executionFeeMicrocredits <= BigInt(Number.MAX_SAFE_INTEGER)
+      ? Number(executionFeeMicrocredits)
+      : undefined;
+
+  const feeCandidates = buildFeeCandidates(
+    wallet,
+    feeAleo,
+    feeMicrocreditsNumber,
+    feePreference,
+  );
+
+  validateLiteralInputs(functionName, inputs);
+
+  const submitWithCompatibility = async (): Promise<string> => {
+    let lastAttemptError: unknown;
+    for (const feeCandidate of feeCandidates) {
+      try {
+        const txRequest: TransactionOptions = {
+          program: programId,
+          function: functionName,
+          inputs,
+          fee: feeCandidate,
+          privateFee,
+        };
+
+        if (process.env.NODE_ENV !== "production" && isShield) {
+          console.warn("[OnlyAleo][Shield] program attempt", txRequest);
+          console.warn("[OnlyAleo][Shield] program attempt payload", JSON.stringify(txRequest));
+        }
+
+        const txId = await requestTransactionCompat(wallet, txRequest);
+        return txId;
+      } catch (error) {
+        if (isUserRejectedError(error)) {
+          throw error;
+        }
+        lastAttemptError = error;
+        if (!isRetryablePayloadFormatError(error)) {
+          throw error;
+        }
+      }
+    }
+
+    throw lastAttemptError ?? new Error("Program transaction failed.");
+  };
+
+  let executionError: unknown;
+  try {
+    return await submitWithCompatibility();
+  } catch (error) {
+    executionError = error;
+  }
+
+  if (
+    isShield &&
+    isRetryablePayloadFormatError(executionError) &&
+    !/invalid_params/i.test((executionError as Error)?.message ?? "") &&
+    typeof wallet.disconnect === "function" &&
+    typeof wallet.connect === "function"
+  ) {
+    try {
+      await wallet.disconnect().catch(() => undefined);
+      await wait(200);
+      await wallet.connect(Network.TESTNET);
+      return await submitWithCompatibility();
+    } catch (reconnectError) {
+      executionError = reconnectError;
+    }
+  }
+
+  try {
+    throw executionError ?? new Error("Program transaction failed.");
+  } catch (error) {
+    if (isUserRejectedError(error)) {
+      throw error;
+    }
+
+    const msg = ((error as Error).message ?? "").toLowerCase();
+    if (isShield && msg.includes("not in the allowed programs")) {
+      throw new Error(
+        `"${programId}" is not in Shield's allowed programs. Disconnect Shield, reconnect, and approve programs again.`,
+      );
+    }
+    if (msg.includes("invalid aleo program") || msg.includes("invalid_params")) {
+      throw new Error(`Wallet cannot validate "${programId}" on testnet.`);
+    }
+
+    throw new Error(
+      `Program execution failed: ${(error as Error).message ?? "Program transaction failed."}. wallet=${adapterName || "unknown"} program=${programId} function=${functionName}`,
+    );
+  }
+};
+
+export const executeCreditsTransfer = async ({
+  wallet,
+  recipientAddress,
+  amountMicrocredits,
+  feeAleo = EXECUTION_FEE_ALEO,
+  feePreference = "auto",
+}: ExecuteCreditsTransferInput): Promise<string> => {
+  if (!wallet.address || !wallet.address.startsWith("aleo1")) {
+    throw new Error("Wallet is not connected to a valid Aleo address.");
+  }
+  if (!recipientAddress || !recipientAddress.startsWith("aleo1")) {
+    throw new Error("Recipient wallet address is missing or invalid.");
+  }
+
+  const amountInput = toU64Literal(amountMicrocredits);
+  const transferAmount = BigInt(amountInput.replace(/u64$/, ""));
+  if (transferAmount <= 0n) {
+    throw new Error("Transfer amount must be greater than zero.");
+  }
+
+  const inputs = [recipientAddress, amountInput];
+  const executionFeeMicrocredits = aleoToMicrocredits(feeAleo);
+
+  // Balance check
+  const publicBalance = await fetchKnownPublicBalanceMicrocredits(wallet.address);
+  if (publicBalance !== undefined) {
+    const required = transferAmount + executionFeeMicrocredits;
+    if (publicBalance < required) {
+      throw new Error(
+        `Insufficient public balance. Required at least ${microcreditsToAleoString(required)} ALEO (${required.toString()} microcredits), but wallet has ${microcreditsToAleoString(publicBalance)} ALEO public balance.`,
+      );
+    }
+  }
+
+  validateLiteralInputs("transfer_public", inputs);
+
+  const adapterName = getWalletAdapterName(wallet);
+  const isShield = adapterName.toLowerCase().includes("shield");
+  const feeMicrocreditsNumber =
+    executionFeeMicrocredits <= BigInt(Number.MAX_SAFE_INTEGER)
+      ? Number(executionFeeMicrocredits)
+      : 250000;
+  const feeCandidates = isShield
+    ? buildShieldPaymentFeeCandidates(feeMicrocreditsNumber, feePreference)
+    : buildFeeCandidates(
+      wallet,
+      EXECUTION_FEE_ALEO,
+      feeMicrocreditsNumber,
+      feePreference,
+    );
+  const recordIndicesCandidates: Array<number[] | undefined> = [undefined];
+
+  const submitWithCompatibility = async (): Promise<string> => {
+    let lastAttemptError: unknown;
+    for (const feeCandidate of feeCandidates) {
+      for (const recordIndicesCandidate of recordIndicesCandidates) {
+        try {
+          const txRequest: TransactionOptions = {
+            program: "credits.aleo",
+            function: "transfer_public",
+            inputs,
+            fee: feeCandidate,
+            privateFee: false,
+            ...(recordIndicesCandidate ? { recordIndices: recordIndicesCandidate } : {}),
+          };
+
+          if (process.env.NODE_ENV !== "production" && isShield) {
+            console.warn("[OnlyAleo][Shield] payment attempt", txRequest);
+            console.warn("[OnlyAleo][Shield] payment attempt payload", JSON.stringify(txRequest));
+          }
+
+          return await requestTransactionCompat(wallet, txRequest);
+        } catch (error) {
+          if (isUserRejectedError(error)) {
+            throw error;
+          }
+          lastAttemptError = error;
+          if (!isRetryablePayloadFormatError(error)) {
+            throw error;
+          }
+        }
+      }
+    }
+
+    throw lastAttemptError ?? new Error("Payment transaction failed.");
+  };
+
+  let executionError: unknown;
+  try {
+    return await submitWithCompatibility();
+  } catch (error) {
+    executionError = error;
+  }
+
+  if (
+    isShield &&
+    isRetryablePayloadFormatError(executionError) &&
+    !/invalid_params/i.test((executionError as Error)?.message ?? "") &&
+    typeof wallet.disconnect === "function" &&
+    typeof wallet.connect === "function"
+  ) {
+    try {
+      await wallet.disconnect().catch(() => undefined);
+      await wait(200);
+      await wallet.connect(Network.TESTNET);
+      return await submitWithCompatibility();
+    } catch (reconnectError) {
+      executionError = reconnectError;
+    }
+  }
+
+  try {
+    throw executionError ?? new Error("Payment transaction failed.");
+  } catch (error) {
+    const msg = ((error as Error).message ?? "").toLowerCase();
+    if (isUserRejectedError(error)) {
+      throw error;
+    }
+
+    if (isShield && msg.includes("not in the allowed programs")) {
+      throw new Error(
+        `"credits.aleo" is not in Shield's allowed programs. Disconnect Shield, reconnect, and approve programs again.`,
+      );
+    }
+    if (isShield && msg.includes("invalid transaction payload")) {
+      throw new Error(
+        "Shield rejected the transaction payload after compatibility retries. Disconnect/reconnect Shield so credits.aleo + app programs are re-authorized, then retry.",
+      );
+    }
+    if (msg.includes("invalid aleo program") || msg.includes("invalid_params")) {
+      const preferredWallet = isLeoWallet(wallet) ? "Shield Wallet" : "Puzzle Wallet or Leo Wallet";
+      throw new Error(`Wallet cannot validate "credits.aleo" on testnet. Retry with ${preferredWallet}.`);
+    }
+
+    throw new Error(
+      `Payment failed: ${(error as Error).message ?? "Payment transaction failed."}. wallet=${adapterName || "unknown"} program=credits.aleo function=transfer_public`,
+    );
+  }
+};

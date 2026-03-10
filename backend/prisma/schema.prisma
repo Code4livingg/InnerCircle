@@ -1,0 +1,182 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum WalletRoleType {
+  FAN
+  CREATOR
+}
+
+enum ContentAccessType {
+  PUBLIC
+  SUBSCRIPTION
+  PPV
+}
+
+// ── Creator ──────────────────────────────────────────────────────────────────
+// Registered via POST /api/creators/register (walletAddress + handle)
+model Creator {
+  id                            String    @id @default(uuid()) @db.Uuid
+  walletHash                    String    @unique          // sha256(walletAddress.toLowerCase())
+  walletAddress                 String    @default("")     // raw aleo1... address for on-chain payments
+  creatorFieldId                String    @unique          // random Aleo field literal
+  handle                        String    @unique          // e.g. "nova-writes"
+  displayName                   String?
+  bio                           String?
+  avatarObjectKey               String?                   // storage key for avatar image
+  subscriptionPriceMicrocredits BigInt    @default(0)
+  isVerified                    Boolean   @default(false)
+  createdAt                     DateTime  @default(now())
+
+  contents  Content[]
+  subscriptionPurchases SubscriptionPurchase[]
+  followers CreatorFollow[]
+
+  @@index([handle])
+}
+
+model FanProfile {
+  id                      String   @id @default(uuid()) @db.Uuid
+  walletHash              String   @unique
+  walletAddress           String   @default("")
+  displayName             String?
+  bio                     String?
+  monthlyBudgetMicrocredits BigInt @default(0)
+  favoriteCategories      String?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+}
+
+model CreatorFollow {
+  id         String   @id @default(uuid()) @db.Uuid
+  creatorId  String   @db.Uuid
+  creator    Creator  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  walletHash String
+  createdAt  DateTime @default(now())
+
+  @@unique([creatorId, walletHash])
+  @@index([creatorId])
+  @@index([walletHash])
+}
+
+// ── Content ──────────────────────────────────────────────────────────────────
+// Uploaded via POST /api/content/upload (multipart/form-data)
+model WalletRole {
+  id         String         @id @default(uuid()) @db.Uuid
+  walletHash String         @unique
+  role       WalletRoleType
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  @@index([role])
+}
+
+model Content {
+  id               String   @id @default(uuid()) @db.Uuid
+  creatorId        String   @db.Uuid
+  creator          Creator  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+
+  contentFieldId   String   @unique          // random Aleo field literal
+  title            String
+  description      String?
+  kind             String   @default("VIDEO") // "VIDEO" | "IMAGE"
+  accessType       ContentAccessType @default(SUBSCRIPTION)
+
+  // Storage
+  storageProvider  String   @default("LOCAL") // "LOCAL" | "S3"
+  baseObjectKey    String                      // base path in object store
+  thumbObjectKey   String?                     // thumbnail image key
+
+  // Pricing: null = subscription-only, >0 = pay-per-view
+  ppvPriceMicrocredits BigInt?
+
+  isPublished      Boolean  @default(false)
+  mimeType         String   @default("video/mp4")
+  sizeBytes        BigInt   @default(0)
+  chunkSizeBytes   Int      @default(0)
+  chunkCount       Int      @default(0)
+
+  // AES-GCM wrapped content key
+  wrappedKeyCiphertextB64 String @default("")
+  wrappedKeyIvB64         String @default("")
+  wrappedKeyAuthTagB64    String @default("")
+
+  createdAt        DateTime @default(now())
+
+  chunks           ContentChunk[]
+  streamEvents     StreamEvent[]
+  ppvPurchases     PpvPurchase[]
+
+  @@index([creatorId])
+  @@index([isPublished])
+}
+
+// ── ContentChunk ─────────────────────────────────────────────────────────────
+// Encrypted AES-GCM chunks stored in object store
+model ContentChunk {
+  id                  String   @id @default(uuid()) @db.Uuid
+  contentId           String   @db.Uuid
+  content             Content  @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  idx                 Int
+  objectKey           String
+  ivB64               String
+  authTagB64          String
+  ciphertextSizeBytes Int
+
+  createdAt           DateTime @default(now())
+
+  @@unique([contentId, idx])
+  @@index([contentId])
+}
+
+// ── StreamEvent ──────────────────────────────────────────────────────────────
+// Audit log of every streaming session (wallet hash only — no identity)
+model StreamEvent {
+  id          String   @id @default(uuid()) @db.Uuid
+  walletHash  String                          // sha256 of viewer wallet
+  contentId   String   @db.Uuid
+  content     Content  @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  sessionId   String
+  watermarkId String
+  bytesServed BigInt   @default(0)
+  createdAt   DateTime @default(now())
+
+  @@index([contentId])
+  @@index([walletHash])
+}
+
+model SubscriptionPurchase {
+  id                 String   @id @default(uuid()) @db.Uuid
+  txId               String   @unique
+  walletHash         String
+  creatorId          String   @db.Uuid
+  creator            Creator  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  creatorFieldId     String
+  priceMicrocredits  BigInt
+  verifiedAt         DateTime @default(now())
+  createdAt          DateTime @default(now())
+
+  @@index([creatorId])
+  @@index([walletHash])
+}
+
+model PpvPurchase {
+  id                 String   @id @default(uuid()) @db.Uuid
+  txId               String   @unique
+  walletHash         String
+  contentId          String   @db.Uuid
+  content            Content  @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  contentFieldId     String
+  priceMicrocredits  BigInt
+  verifiedAt         DateTime @default(now())
+  createdAt          DateTime @default(now())
+
+  @@index([contentId])
+  @@index([walletHash])
+}

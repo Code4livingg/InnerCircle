@@ -1,0 +1,9 @@
+{
+  "program": "creator_reg_v2_xwnxp.aleo",
+  "version": "0.1.0",
+  "description": "",
+  "license": "MIT",
+  "leo": "3.4.0",
+  "dependencies": null,
+  "dev_dependencies": null
+}

@@ -1,0 +1,388 @@
+import type { Request, Response } from "express";
+import { z } from "zod";
+import { prisma } from "../db/prisma.js";
+import {
+  ensureWalletRoleByHash,
+  toClientRole,
+  walletHashForAddress,
+  WalletRoleConflictError,
+} from "../services/walletRoleService.js";
+import { randomFieldLiteral } from "../utils/aleo.js";
+import { DB_UNAVAILABLE_CODE, DB_UNAVAILABLE_MESSAGE, isDatabaseUnavailableError } from "../utils/dbErrors.js";
+
+const registerSchema = z.object({
+  walletAddress: z.string().min(10),
+  handle: z
+    .string()
+    .min(3)
+    .max(24)
+    .regex(/^[a-z0-9_-]+$/i, "Handle must contain only letters, numbers, underscores, or hyphens"),
+  displayName: z.string().max(80).optional(),
+  bio: z.string().max(500).optional(),
+});
+
+const pricingSchema = z.object({
+  walletAddress: z.string().min(10),
+  subscriptionPriceMicrocredits: z.coerce.bigint().nonnegative(),
+});
+
+const walletLookupSchema = z.object({
+  walletAddress: z.string().min(10),
+});
+
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+const getActiveSubscriptionCutoff = (): Date => new Date(Date.now() - THIRTY_DAYS_MS);
+
+const getMonthStart = (): Date => {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), 1);
+};
+
+const sumMaybeBigInts = (values: Array<bigint | null | undefined>): bigint =>
+  values.reduce<bigint>((total, value) => total + (value ?? 0n), 0n);
+
+const serializeCreator = <T extends {
+  _count?: { followers?: number };
+  contents?: Array<{ accessType?: string }>;
+}>(creator: T): T & { followerCount: number } => {
+  const followerCount = creator._count?.followers ?? 0;
+  return {
+    ...creator,
+    followerCount,
+  };
+};
+
+export const registerCreator = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const payload = registerSchema.parse(req.body);
+    const wh = walletHashForAddress(payload.walletAddress);
+    await ensureWalletRoleByHash(wh, "CREATOR");
+
+    const creator = await prisma.creator.upsert({
+      where: { walletHash: wh },
+      update: {
+        walletAddress: payload.walletAddress,
+        handle: payload.handle.toLowerCase(),
+        displayName: payload.displayName,
+        bio: payload.bio,
+      },
+      create: {
+        walletHash: wh,
+        walletAddress: payload.walletAddress,
+        creatorFieldId: randomFieldLiteral(),
+        handle: payload.handle.toLowerCase(),
+        displayName: payload.displayName,
+        bio: payload.bio,
+      },
+    });
+
+    res.json({ creator });
+  } catch (error) {
+    if (error instanceof WalletRoleConflictError) {
+      res.status(409).json({
+        error: `This wallet is already locked as ${toClientRole(error.existingRole)}. Use a different wallet to register as ${toClientRole(error.requestedRole)}.`,
+        code: "ROLE_CONFLICT",
+        existingRole: toClientRole(error.existingRole),
+        requestedRole: toClientRole(error.requestedRole),
+      });
+      return;
+    }
+
+    if (isDatabaseUnavailableError(error)) {
+      res.status(503).json({
+        error: DB_UNAVAILABLE_MESSAGE,
+        code: DB_UNAVAILABLE_CODE,
+      });
+      return;
+    }
+
+    res.status(400).json({ error: (error as Error).message });
+  }
+};
+
+export const listCreators = async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const creators = await prisma.creator.findMany({
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        creatorFieldId: true,
+        walletAddress: true,
+        handle: true,
+        displayName: true,
+        bio: true,
+        avatarObjectKey: true,
+        subscriptionPriceMicrocredits: true,
+        isVerified: true,
+        createdAt: true,
+        _count: {
+          select: {
+            followers: true,
+          },
+        },
+      },
+    });
+
+    res.json({ creators: creators.map((creator) => serializeCreator(creator)) });
+  } catch (error) {
+    if (isDatabaseUnavailableError(error)) {
+      res.status(503).json({
+        error: DB_UNAVAILABLE_MESSAGE,
+        code: DB_UNAVAILABLE_CODE,
+      });
+      return;
+    }
+
+    res.status(400).json({ error: (error as Error).message });
+  }
+};
+
+export const getCreatorByHandle = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { handle } = req.params;
+
+    const creator = await prisma.creator.findUnique({
+      where: { handle: handle.toLowerCase() },
+      include: {
+        contents: {
+          orderBy: { createdAt: "desc" },
+          select: {
+            id: true,
+            contentFieldId: true,
+            title: true,
+            description: true,
+            kind: true,
+            accessType: true,
+            ppvPriceMicrocredits: true,
+            isPublished: true,
+            thumbObjectKey: true,
+            createdAt: true,
+          },
+        },
+        _count: {
+          select: {
+            followers: true,
+          },
+        },
+      },
+    });
+    // Return walletAddress so frontend can pass it to payment contract
+    if (!creator) {
+      res.status(404).json({ error: "Creator not found" });
+      return;
+    }
+
+    res.json({ creator: serializeCreator(creator) });
+  } catch (error) {
+    if (isDatabaseUnavailableError(error)) {
+      res.status(503).json({
+        error: DB_UNAVAILABLE_MESSAGE,
+        code: DB_UNAVAILABLE_CODE,
+      });
+      return;
+    }
+
+    res.status(400).json({ error: (error as Error).message });
+  }
+};
+
+export const getCreatorByWalletAddress = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const payload = walletLookupSchema.parse(req.params);
+    const wh = walletHashForAddress(payload.walletAddress);
+
+    const creator = await prisma.creator.findUnique({
+      where: { walletHash: wh },
+      include: {
+        contents: {
+          orderBy: { createdAt: "desc" },
+          select: {
+            id: true,
+            contentFieldId: true,
+            title: true,
+            description: true,
+            kind: true,
+            accessType: true,
+            ppvPriceMicrocredits: true,
+            isPublished: true,
+            thumbObjectKey: true,
+            createdAt: true,
+          },
+        },
+        _count: {
+          select: {
+            followers: true,
+          },
+        },
+      },
+    });
+
+    if (!creator) {
+      res.status(404).json({ error: "Creator not found" });
+      return;
+    }
+
+    res.json({ creator: serializeCreator(creator) });
+  } catch (error) {
+    if (isDatabaseUnavailableError(error)) {
+      res.status(503).json({
+        error: DB_UNAVAILABLE_MESSAGE,
+        code: DB_UNAVAILABLE_CODE,
+      });
+      return;
+    }
+
+    res.status(400).json({ error: (error as Error).message });
+  }
+};
+
+export const setCreatorPricing = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const payload = pricingSchema.parse(req.body);
+    const wh = walletHashForAddress(payload.walletAddress);
+
+    const creator = await prisma.creator.update({
+      where: { walletHash: wh },
+      data: { subscriptionPriceMicrocredits: payload.subscriptionPriceMicrocredits },
+    });
+
+    res.json({ creator });
+  } catch (error) {
+    if (isDatabaseUnavailableError(error)) {
+      res.status(503).json({
+        error: DB_UNAVAILABLE_MESSAGE,
+        code: DB_UNAVAILABLE_CODE,
+      });
+      return;
+    }
+
+    res.status(400).json({ error: (error as Error).message });
+  }
+};
+
+export const getCreatorAnalyticsByWalletAddress = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const payload = walletLookupSchema.parse(req.params);
+    const creator = await prisma.creator.findUnique({
+      where: { walletHash: walletHashForAddress(payload.walletAddress) },
+      select: {
+        id: true,
+        handle: true,
+        displayName: true,
+        subscriptionPriceMicrocredits: true,
+        contents: {
+          select: {
+            id: true,
+            isPublished: true,
+            accessType: true,
+            ppvPriceMicrocredits: true,
+          },
+        },
+      },
+    });
+
+    if (!creator) {
+      res.status(404).json({ error: "Creator not found" });
+      return;
+    }
+
+    const activeSubscriptionCutoff = getActiveSubscriptionCutoff();
+    const monthStart = getMonthStart();
+
+    const [
+      followerCount,
+      activeSubscriptions,
+      totalSubscribers,
+      subscriptionRevenueAgg,
+      monthlySubscriptionRevenueAgg,
+      ppvRevenueAgg,
+      monthlyPpvRevenueAgg,
+    ] = await Promise.all([
+      prisma.creatorFollow.count({ where: { creatorId: creator.id } }),
+      prisma.subscriptionPurchase.findMany({
+        where: {
+          creatorId: creator.id,
+          verifiedAt: { gte: activeSubscriptionCutoff },
+        },
+        distinct: ["walletHash"],
+        select: { walletHash: true },
+      }),
+      prisma.subscriptionPurchase.findMany({
+        where: { creatorId: creator.id },
+        distinct: ["walletHash"],
+        select: { walletHash: true },
+      }),
+      prisma.subscriptionPurchase.aggregate({
+        where: { creatorId: creator.id },
+        _sum: { priceMicrocredits: true },
+      }),
+      prisma.subscriptionPurchase.aggregate({
+        where: {
+          creatorId: creator.id,
+          verifiedAt: { gte: monthStart },
+        },
+        _sum: { priceMicrocredits: true },
+      }),
+      prisma.ppvPurchase.aggregate({
+        where: {
+          content: { creatorId: creator.id },
+        },
+        _sum: { priceMicrocredits: true },
+      }),
+      prisma.ppvPurchase.aggregate({
+        where: {
+          content: { creatorId: creator.id },
+          verifiedAt: { gte: monthStart },
+        },
+        _sum: { priceMicrocredits: true },
+      }),
+    ]);
+
+    const publicPosts = creator.contents.filter((content) => content.accessType === "PUBLIC");
+    const subscriptionPosts = creator.contents.filter((content) => content.accessType === "SUBSCRIPTION");
+    const ppvPosts = creator.contents.filter((content) => content.accessType === "PPV");
+
+    const totalRevenueMicrocredits = sumMaybeBigInts([
+      subscriptionRevenueAgg._sum.priceMicrocredits,
+      ppvRevenueAgg._sum.priceMicrocredits,
+    ]);
+    const monthlyRevenueMicrocredits = sumMaybeBigInts([
+      monthlySubscriptionRevenueAgg._sum.priceMicrocredits,
+      monthlyPpvRevenueAgg._sum.priceMicrocredits,
+    ]);
+
+    res.json({
+      creator: {
+        id: creator.id,
+        handle: creator.handle,
+        displayName: creator.displayName,
+        subscriptionPriceMicrocredits: creator.subscriptionPriceMicrocredits.toString(),
+      },
+      stats: {
+        followerCount,
+        activeSubscriberCount: activeSubscriptions.length,
+        totalSubscriberCount: totalSubscribers.length,
+        totalRevenueMicrocredits: totalRevenueMicrocredits.toString(),
+        monthlyRevenueMicrocredits: monthlyRevenueMicrocredits.toString(),
+        subscriptionRevenueMicrocredits: (subscriptionRevenueAgg._sum.priceMicrocredits ?? 0n).toString(),
+        ppvRevenueMicrocredits: (ppvRevenueAgg._sum.priceMicrocredits ?? 0n).toString(),
+        publicPostCount: publicPosts.length,
+        subscriptionPostCount: subscriptionPosts.length,
+        ppvPostCount: ppvPosts.length,
+        totalContentCount: creator.contents.length,
+        publishedContentCount: creator.contents.filter((content) => content.isPublished).length,
+      },
+    });
+  } catch (error) {
+    if (isDatabaseUnavailableError(error)) {
+      res.status(503).json({
+        error: DB_UNAVAILABLE_MESSAGE,
+        code: DB_UNAVAILABLE_CODE,
+      });
+      return;
+    }
+
+    res.status(400).json({ error: (error as Error).message });
+  }
+};
