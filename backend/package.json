@@ -9,6 +9,7 @@
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "media:migrate:s3": "tsx scripts/migrateLocalContentToS3.ts",
+    "db:migrate:rds": "tsx scripts/migrateLocalDbToRds.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
