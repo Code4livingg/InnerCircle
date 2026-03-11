@@ -376,8 +376,8 @@ export default function ContentPage({ params }: ContentPageProps) {
       {streamSrc ? (
         <>
           <div className="stream-player-wrap">
-            {String(content.mimeType ?? "").toLowerCase().startsWith("video/") ? (
-              traceSession && streamSrc ? (
+            {traceSession ? (
+              String(content.mimeType ?? "").toLowerCase().startsWith("video/") ? (
                 <ProtectedVideoPlayer
                   src={streamSrc}
                   title={content.title}
@@ -386,15 +386,24 @@ export default function ContentPage({ params }: ContentPageProps) {
                   sessionId={traceSession.sessionId}
                 />
               ) : (
-                <div className="card card--panel" style={{ textAlign: "center" }}>
-                  <div className="spinner" style={{ margin: "0 auto" }} />
-                  <p className="t-sm t-muted" style={{ marginTop: "var(--s2)" }}>
-                    Preparing privacy watermark...
-                  </p>
-                </div>
+                <StreamingPlayer
+                  src={streamSrc}
+                  mimeType={content.mimeType}
+                  title={content.title}
+                  watermark={{
+                    fingerprint: traceSession.fingerprint,
+                    shortWallet: traceSession.shortWallet,
+                    sessionId: traceSession.sessionId,
+                  }}
+                />
               )
             ) : (
-              <StreamingPlayer src={streamSrc} mimeType={content.mimeType} title={content.title} />
+              <div className="card card--panel" style={{ textAlign: "center" }}>
+                <div className="spinner" style={{ margin: "0 auto" }} />
+                <p className="t-sm t-muted" style={{ marginTop: "var(--s2)" }}>
+                  Preparing privacy watermark...
+                </p>
+              </div>
             )}
           </div>
           <div className="card stream-controls">
