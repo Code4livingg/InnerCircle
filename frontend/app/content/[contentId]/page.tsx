@@ -7,10 +7,12 @@ import { Network } from "@provablehq/aleo-types";
 import {
   ApiError,
   createSession,
+  fetchMediaAccessUrl,
   fetchContentById,
   fetchSubscriptionStatus,
   startSession,
   type ContentDetails,
+  type MediaAccessResponse,
   type StartSessionResponse,
   verifyPurchase,
 } from "../../../lib/api";
@@ -84,6 +86,7 @@ export default function ContentPage({ params }: ContentPageProps) {
   const [proofTxId, setProofTxId] = useState<string | null>(null);
 
   const [sessionToken, setSessionToken] = useState<string | null>(null);
+  const [mediaAccess, setMediaAccess] = useState<MediaAccessResponse | null>(null);
   const [traceSession, setTraceSession] = useState<StartSessionResponse | null>(null);
   const [hasActiveSubscription, setHasActiveSubscription] = useState(false);
   const [subscriptionTxId, setSubscriptionTxId] = useState<string | null>(null);
@@ -135,11 +138,52 @@ export default function ContentPage({ params }: ContentPageProps) {
     };
   }, [address, connected, content, isPpvContent]);
 
-  const streamSrc = useMemo(() => {
-    if (!sessionToken) return null;
-    const base = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080";
-    return `${base}/api/content/${contentId}/stream?token=${encodeURIComponent(sessionToken)}`;
-  }, [contentId, sessionToken]);
+  const streamSrc = useMemo(() => mediaAccess?.url ?? null, [mediaAccess]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let refreshTimer: number | undefined;
+
+    const refreshSignedUrl = async (): Promise<void> => {
+      if (!sessionToken) {
+        if (!cancelled) {
+          setMediaAccess(null);
+        }
+        return;
+      }
+
+      try {
+        const nextMediaAccess = await fetchMediaAccessUrl(contentId, sessionToken);
+        if (cancelled) {
+          return;
+        }
+
+        setMediaAccess(nextMediaAccess);
+
+        const shouldRefreshContinuously = !!content && !String(content.mimeType ?? "").toLowerCase().startsWith("image/");
+        if (shouldRefreshContinuously) {
+          const refreshDelayMs = Math.max((nextMediaAccess.expiresIn - 15) * 1000, 15_000);
+          refreshTimer = window.setTimeout(() => {
+            void refreshSignedUrl();
+          }, refreshDelayMs);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setMediaAccess(null);
+          setProofError((error as Error).message || "Failed to prepare secure media playback.");
+        }
+      }
+    };
+
+    void refreshSignedUrl();
+
+    return () => {
+      cancelled = true;
+      if (refreshTimer) {
+        window.clearTimeout(refreshTimer);
+      }
+    };
+  }, [content, contentId, sessionToken]);
 
   const activateTraceSession = async (nextSessionToken: string): Promise<void> => {
     if (!address) {
@@ -175,6 +219,7 @@ export default function ContentPage({ params }: ContentPageProps) {
 
     setPurchaseError(null);
     setPurchaseTxId(null);
+    setMediaAccess(null);
 
     try {
       await ensureWalletConnected();
@@ -234,6 +279,7 @@ export default function ContentPage({ params }: ContentPageProps) {
 
     setProofError(null);
     setProofTxId(null);
+    setMediaAccess(null);
 
     try {
       await ensureWalletConnected();
@@ -331,7 +377,7 @@ export default function ContentPage({ params }: ContentPageProps) {
         <>
           <div className="stream-player-wrap">
             {String(content.mimeType ?? "").toLowerCase().startsWith("video/") ? (
-              traceSession ? (
+              traceSession && streamSrc ? (
                 <ProtectedVideoPlayer
                   src={streamSrc}
                   title={content.title}
@@ -353,8 +399,9 @@ export default function ContentPage({ params }: ContentPageProps) {
           </div>
           <div className="card stream-controls">
             <p className="t-xs t-dim">
-              Session active. Content stream is decrypted server-side per authorized scope.
+              Session active. Media is delivered through a short-lived private S3 signed URL issued by the backend.
               {traceSession ? ` Watermark viewer ${traceSession.fingerprint} expires at ${traceSession.expiresAt}.` : ""}
+              {mediaAccess ? ` Media URL refreshes every ${mediaAccess.expiresIn} seconds.` : ""}
             </p>
           </div>
         </>

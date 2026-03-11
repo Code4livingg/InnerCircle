@@ -44,6 +44,17 @@ const getJson = async <T>(path: string): Promise<T> => {
   return (await res.json()) as T;
 };
 
+const getJsonWithHeaders = async <T>(path: string, headers: HeadersInit): Promise<T> => {
+  const res = await fetch(`${base}${path}`, {
+    cache: "no-store",
+    headers,
+  });
+  if (!res.ok) {
+    return throwApiError(res);
+  }
+  return (await res.json()) as T;
+};
+
 export interface Creator {
   id: string;
   walletAddress: string;
@@ -182,6 +193,13 @@ export interface StartSessionResponse {
   expiresAt: string;
 }
 
+export interface MediaAccessResponse {
+  url: string;
+  expiresAt: string;
+  expiresIn: number;
+  mimeType: string;
+}
+
 export type WalletRole = "user" | "creator";
 
 export interface WalletRoleResponse {
@@ -308,6 +326,14 @@ export const createSession = (body: CreateSessionRequest): Promise<CreateSession
 
 export const startSession = (body: StartSessionRequest): Promise<StartSessionResponse> =>
   postJson("/api/start-session", body);
+
+export const fetchMediaAccessUrl = (
+  contentId: string,
+  sessionToken: string,
+): Promise<MediaAccessResponse> =>
+  getJsonWithHeaders(`/api/media/${encodeURIComponent(contentId)}`, {
+    Authorization: `Bearer ${sessionToken}`,
+  });
 
 export const fetchWalletRoleLock = (walletAddress: string): Promise<WalletRoleResponse> =>
   getJson(`/api/roles/${encodeURIComponent(walletAddress)}`);

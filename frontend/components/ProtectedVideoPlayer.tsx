@@ -19,6 +19,7 @@ export function ProtectedVideoPlayer({
   sessionId,
 }: ProtectedVideoPlayerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const [overlayNonce, setOverlayNonce] = useState(0);
 
   useEffect(() => {
@@ -40,6 +41,39 @@ export function ProtectedVideoPlayer({
     };
   }, []);
 
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || video.dataset.signedSrc === src) {
+      return undefined;
+    }
+
+    const previousTime = video.currentTime;
+    const shouldResume = !video.paused;
+    video.dataset.signedSrc = src;
+    video.src = src;
+    video.load();
+
+    const restorePlayback = (): void => {
+      if (previousTime > 0) {
+        try {
+          video.currentTime = previousTime;
+        } catch {
+          // Ignore restore failures for short media or unseekable sources.
+        }
+      }
+
+      if (shouldResume) {
+        void video.play().catch(() => undefined);
+      }
+    };
+
+    video.addEventListener("loadedmetadata", restorePlayback, { once: true });
+
+    return () => {
+      video.removeEventListener("loadedmetadata", restorePlayback);
+    };
+  }, [src]);
+
   return (
     <div
       ref={containerRef}
@@ -47,9 +81,9 @@ export function ProtectedVideoPlayer({
       onContextMenu={(event) => event.preventDefault()}
     >
       <video
+        ref={videoRef}
         controls
         preload="metadata"
-        src={src}
         title={title ?? "Protected video"}
         controlsList="nodownload noplaybackrate noremoteplayback"
         disablePictureInPicture

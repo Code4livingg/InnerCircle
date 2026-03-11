@@ -133,7 +133,7 @@ export default function UploadPage() {
             {success && (
                 <div className="card card--panel" style={{ marginBottom: "var(--s4)", borderColor: "var(--c-success)" }}>
                     <p className="t-sm" style={{ color: "var(--c-success)" }}>
-                        ✓ Content uploaded and encrypted successfully.
+                        ✓ Content uploaded securely to private media storage.
                     </p>
                 </div>
             )}
@@ -282,7 +282,7 @@ export default function UploadPage() {
                         disabled={loading || !file}
                         id="upload-submit"
                     >
-                        {loading ? "Uploading & encrypting…" : "Publish Content"}
+                        {loading ? "Uploading to secure media storage…" : "Publish Content"}
                     </button>
 
                     {!address && (

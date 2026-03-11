@@ -1,16 +1,9 @@
 import { Router } from "express";
 import multer from "multer";
-import { mkdirSync } from "node:fs";
-import { resolve } from "node:path";
-import { getContent, streamContent, streamPublicContent, uploadContent } from "../controllers/content.controller.js";
-import { requireSession } from "../middleware/requireSession.js";
-import { env } from "../config/env.js";
-
-const tmpDir = resolve(env.storageLocalDir, "tmp");
-mkdirSync(tmpDir, { recursive: true });
+import { getContent, uploadContent } from "../controllers/content.controller.js";
 
 const upload = multer({
-  dest: tmpDir,
+  storage: multer.memoryStorage(),
   limits: {
     fileSize: 1024 * 1024 * 1024, // 1GB
   },
@@ -46,7 +39,5 @@ const contentRouter = Router();
 
 contentRouter.post("/upload", uploadContentWithFiles, uploadContent);
 contentRouter.get("/:contentId", getContent);
-contentRouter.get("/:contentId/public-stream", streamPublicContent);
-contentRouter.get("/:contentId/stream", requireSession, streamContent);
 
 export { contentRouter };

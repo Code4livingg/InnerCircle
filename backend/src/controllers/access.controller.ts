@@ -93,7 +93,7 @@ export const unlockContent = async (req: Request, res: Response): Promise<void> 
       sessionToken: session.token,
       sessionId: session.sessionId,
       expiresAt: session.expiresAt,
-      streamPath: `/api/content/${content.id}/stream`,
+      streamPath: `/api/media/${content.id}`,
     });
   } catch (error) {
     if (error instanceof WalletRoleConflictError) {

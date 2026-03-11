@@ -7,10 +7,16 @@ const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().positive().default(8080),
   CORS_ORIGINS: z.string().optional(),
+  TRUST_PROXY: z.string().default("false"),
   SESSION_SECRET: z.string().min(16),
   SESSION_TTL_SECONDS: z.coerce.number().int().positive().default(900),
   FINGERPRINT_SESSION_TTL_SECONDS: z.coerce.number().int().positive().default(1800),
   STREAM_TTL_SECONDS: z.coerce.number().int().positive().default(600),
+  AWS_REGION: z.string().min(1),
+  AWS_ACCESS_KEY_ID: z.string().min(1),
+  AWS_SECRET_ACCESS_KEY: z.string().min(1),
+  S3_BUCKET_NAME: z.string().min(1),
+  SIGNED_URL_EXPIRATION: z.coerce.number().int().positive().default(60),
 
   DATABASE_URL: z.string().min(10),
   DB_CONNECT_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(5),
@@ -51,6 +57,24 @@ const parseCommaSeparated = (value?: string): string[] => {
     .filter((item) => item.length > 0);
 };
 
+const parseTrustProxy = (value: string): boolean | number => {
+  const normalized = value.trim().toLowerCase();
+
+  if (normalized === "true") {
+    return true;
+  }
+
+  if (normalized === "false" || normalized.length === 0) {
+    return false;
+  }
+
+  if (/^\d+$/.test(normalized)) {
+    return Number.parseInt(normalized, 10);
+  }
+
+  throw new Error("TRUST_PROXY must be 'false', 'true', or a non-negative integer.");
+};
+
 const withPostgresTimeout = (urlValue: string, timeoutSeconds: number): string => {
   try {
     const parsedUrl = new URL(urlValue);
@@ -67,10 +91,16 @@ export const env = {
   nodeEnv: parsed.NODE_ENV,
   port: parsed.PORT,
   corsOrigins: parseCommaSeparated(parsed.CORS_ORIGINS),
+  trustProxy: parseTrustProxy(parsed.TRUST_PROXY),
   sessionSecret: parsed.SESSION_SECRET,
   sessionTtlSeconds: parsed.SESSION_TTL_SECONDS,
   fingerprintSessionTtlSeconds: parsed.FINGERPRINT_SESSION_TTL_SECONDS,
   streamTtlSeconds: parsed.STREAM_TTL_SECONDS,
+  awsRegion: parsed.AWS_REGION,
+  awsAccessKeyId: parsed.AWS_ACCESS_KEY_ID,
+  awsSecretAccessKey: parsed.AWS_SECRET_ACCESS_KEY,
+  s3BucketName: parsed.S3_BUCKET_NAME,
+  signedUrlExpirationSeconds: parsed.SIGNED_URL_EXPIRATION,
   databaseUrl: withPostgresTimeout(parsed.DATABASE_URL, parsed.DB_CONNECT_TIMEOUT_SECONDS),
   dbConnectTimeoutSeconds: parsed.DB_CONNECT_TIMEOUT_SECONDS,
   rateLimitWindowMs: parsed.RATE_LIMIT_WINDOW_MS,
