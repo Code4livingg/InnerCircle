@@ -21,6 +21,18 @@ export class WalletRoleConflictError extends Error {
 
 const isRole = (value: unknown): value is AppRole => value === "user" || value === "creator";
 
+const isTransientApiError = (error: ApiError): boolean => {
+  if (error.code === "DB_UNAVAILABLE") return true;
+  if (error.status === 0 || error.status >= 500) return true;
+
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("request failed") ||
+    message.includes("failed to fetch") ||
+    message.includes("could not reach the backend")
+  );
+};
+
 const normalizeWallet = (walletAddress: string): string => walletAddress.trim().toLowerCase();
 
 const readRoleMap = (): Record<string, AppRole> => {
@@ -96,16 +108,21 @@ export const claimWalletRoleWithBackend = async (walletAddress: string, role: Ap
     await claimWalletRoleLock(walletAddress, role);
     return role;
   } catch (error) {
-    if (error instanceof ApiError && error.code === "DB_UNAVAILABLE") {
-      return role;
-    }
-
     if (error instanceof ApiError && error.code === "ROLE_CONFLICT") {
       const remote = await syncWalletRoleFromBackend(walletAddress).catch(() => null);
       if (remote && remote !== role) {
         throw new WalletRoleConflictError(remote, role);
       }
     }
+
+    if (error instanceof ApiError && isTransientApiError(error)) {
+      return role;
+    }
+
+    if (error instanceof TypeError && /fetch/i.test(error.message)) {
+      return role;
+    }
+
     throw error;
   }
 };

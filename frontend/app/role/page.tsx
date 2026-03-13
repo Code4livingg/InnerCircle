@@ -41,6 +41,12 @@ export default function RolePage() {
       return;
     }
 
+    if (lockedRole === role) {
+      setError(null);
+      router.push(role === "creator" ? "/creator-studio/onboarding" : "/settings?setup=fan");
+      return;
+    }
+
     try {
       await claimWalletRoleWithBackend(address, role);
       setError(null);
