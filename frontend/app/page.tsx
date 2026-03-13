@@ -1,108 +1,85 @@
 "use client";
 
 import Link from "next/link";
-import Image from "next/image";
-import { HeroTypingText } from "../components/HeroTypingText";
 
 export default function LandingPage() {
   return (
     <main className="ic-landing">
-      {/* Noise texture overlay */}
-      <div className="ic-noise" aria-hidden="true" />
 
-      {/* Cinematic glow background */}
-      <div className="ic-bg-glow" aria-hidden="true" />
+      {/* Ambient fixed red glow */}
+      <div className="ic-portal-ambient" aria-hidden="true" />
 
-      {/* Massive background typography */}
-      <div className="ic-bg-text" aria-hidden="true">
-        <h1>INNER CIRCLE</h1>
-      </div>
+      {/* ── Cinematic Portal Hero ── */}
+      <section className="ic-hero-cinematic">
 
-      {/* ── Hero Card ── */}
-      <section className="ic-hero-outer">
-        <div className="ic-hero-card ic-fade-up">
+        {/* Portal Ring Visual (background) */}
+        <div className="ic-portal" aria-hidden="true">
 
-          {/* 3-Column Narrative Grid */}
-          <div className="ic-hero-grid">
+          {/* Atmospheric haze */}
+          <div className="ic-portal__haze" />
 
-            {/* Left — Story Text */}
-            <div className="ic-hero__text ic-fade-up ic-delay-200">
-              <h2 className="ic-hero__title">
-                <span>Watch.</span>
-                <span>Subscribe.</span>
-                <span className="ic-red">Own.</span>
-              </h2>
-
-              <div className="ic-hero__copy">
-                <div className="ic-hero__line-decor" />
-                <HeroTypingText />
-                <div className="ic-hero__desc">
-                  <p>A private creator economy powered by Aleo.</p>
-                  <p className="ic-dim">
-                    No surveillance.<br />
-                    No platform control.<br />
-                    Only creators and their circle.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Center — Visual Symbol */}
-            <div className="ic-hero__visual ic-fade-up ic-delay-300">
-              <div className="ic-hero__image-container">
-                <div className="ic-hero__phone">
-                  <div className="ic-hero__phone-overlay-top" />
-                  <div className="ic-hero__phone-overlay-shadow" />
-                  <Image
-                    src="/hero-woman.png"
-                    alt="InnerCircle — premium creator"
-                    width={240}
-                    height={420}
-                    priority
-                    style={{ objectFit: "cover", width: "100%", height: "100%" }}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Right — Step Panel */}
-            <div className="ic-hero__panel ic-fade-up ic-delay-400">
-              <div className="ic-panel">
-                <div className="ic-panel__glow" />
-
-                {/* Step 01 */}
-                <div className="ic-step">
-                  <span className="ic-step__label ic-red">Step 01</span>
-                  <h3 className="ic-step__title">Connect your private wallet</h3>
-                  <div className="ic-step__content">
-                    <Link href="/wallet" className="ic-btn-red">
-                      <span>Connect Wallet</span>
-                      <span className="ic-btn-arrow">→</span>
-                    </Link>
-                  </div>
-                </div>
-
-                {/* Step 02 */}
-                <div className="ic-step ic-step--dim">
-                  <span className="ic-step__label">Step 02</span>
-                  <h3 className="ic-step__title">Enter the creator circle</h3>
-                  <div className="ic-step__content">
-                    <Link href="/discover" className="ic-btn-outline">
-                      <span>Explore Creators</span>
-                      <span className="ic-btn-arrow">→</span>
-                    </Link>
-                  </div>
-                </div>
-
-                {/* Step 03 */}
-                <div className="ic-step ic-step--locked">
-                  <span className="ic-step__label">Step 03</span>
-                  <h3 className="ic-step__title">Unlock private content</h3>
-                </div>
-              </div>
-            </div>
-
+          {/* Outer debris ring */}
+          <div className="ic-portal__outer-ring">
+            <div className="ic-particle" />
+            <div className="ic-particle" />
           </div>
+
+          {/* Main energy ring — pulsing + spinning */}
+          <div className="ic-portal__main-ring">
+            <div className="ic-portal__main-ring-inner">
+              <div className="ic-orb" />
+              <div className="ic-orb" />
+              <div className="ic-orb" />
+            </div>
+          </div>
+
+          {/* Inner plasma ring */}
+          <div className="ic-portal__inner-ring" />
+        </div>
+
+        {/* Foreground hero content */}
+        <div className="ic-hero__content ic-fade-up">
+
+          {/* Stacked headline */}
+          <h1 className="ic-hero__headline ic-fade-up ic-delay-100">
+            <span>Watch.</span>
+            <span>Subscribe.</span>
+            <span className="ic-red">Own.</span>
+          </h1>
+
+          {/* Subheadline */}
+          <h2 className="ic-hero__sub ic-fade-up ic-delay-200">
+            Where Privacy Meets Power
+          </h2>
+
+          {/* Supporting text */}
+          <p className="ic-hero__desc-text ic-fade-up ic-delay-200">
+            A private creator economy powered by Aleo.
+          </p>
+
+          {/* Pill row — three bullet points */}
+          <div className="ic-hero__pill-row ic-fade-up ic-delay-300">
+            <div className="ic-hero__pill-item">
+              <div className="ic-hero__pill-dot" />
+              No surveillance
+            </div>
+            <div className="ic-hero__pill-sep" />
+            <div className="ic-hero__pill-item">
+              <div className="ic-hero__pill-dot" />
+              No platform control
+            </div>
+            <div className="ic-hero__pill-sep" />
+            <div className="ic-hero__pill-item">
+              <div className="ic-hero__pill-dot" />
+              Only creators and their circle
+            </div>
+          </div>
+
+          {/* CTA */}
+          <Link href="/wallet" className="ic-hero__cta ic-fade-up ic-delay-400">
+            Connect Wallet
+            <span className="ic-hero__cta-arrow">→</span>
+          </Link>
         </div>
       </section>
 

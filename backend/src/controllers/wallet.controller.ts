@@ -18,7 +18,8 @@ const WALLET_SESSION_MAX_AGE_MS = 5 * 60 * 1000;
 
 const parseWalletSessionMessage = (message: string): { walletAddress: string; issuedAtMs: number; nonce: string } => {
   const lines = message.trim().split(/\r?\n/).map((line) => line.trim());
-  if (lines[0] !== "InnerCircle wallet session") {
+  const allowedPrefixes = new Set(["InnerCircle wallet session", "OnlyAleo wallet session"]);
+  if (!allowedPrefixes.has(lines[0])) {
     throw new Error("Invalid wallet session message prefix");
   }
 

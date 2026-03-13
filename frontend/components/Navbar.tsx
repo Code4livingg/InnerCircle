@@ -42,10 +42,14 @@ export function Navbar() {
     const isLanding = pathname === "/" || pathname === "/wallet" || pathname === "/role";
 
     return (
-        <nav className="navbar">
+        <nav className={`navbar${isLanding ? " navbar--landing" : ""}`}>
             <div className="navbar__inner">
                 <Link href="/" className="navbar__logo">
-                    <span className="navbar__logo-icon">IC</span>
+                    {isLanding ? (
+                        <div className="navbar__logo-dot" />
+                    ) : (
+                        <span className="navbar__logo-icon">IC</span>
+                    )}
                     <span>InnerCircle</span>
                 </Link>
 

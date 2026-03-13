@@ -1,7 +1,7 @@
 "use client";
 
 import type { WalletContextState } from "@/lib/walletContext";
-import { createWalletSession } from "./api";
+import { ApiError, createWalletSession } from "./api";
 import { signAleoWalletMessage } from "./walletSignature";
 
 interface StoredWalletSession {
@@ -52,18 +52,28 @@ const persistSession = (walletAddress: string, session: StoredWalletSession): vo
   window.sessionStorage.setItem(storageKeyForWallet(walletAddress), JSON.stringify(session));
 };
 
-const buildWalletSessionMessage = (walletAddress: string): string => {
+const buildWalletSessionMessage = (walletAddress: string, prefix: string): string => {
   const nonce =
     typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()
       : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
   return [
-    "InnerCircle wallet session",
+    prefix,
     `wallet:${walletAddress}`,
     `ts:${Date.now()}`,
     `nonce:${nonce}`,
   ].join("\n");
+};
+
+const requestWalletSession = async (wallet: WalletContextState, prefix: string): Promise<StoredWalletSession> => {
+  const message = buildWalletSessionMessage(wallet.address!, prefix);
+  const signature = await signAleoWalletMessage(wallet, message);
+  const session = await createWalletSession(wallet.address!, message, signature);
+  return {
+    token: session.token,
+    expiresAt: session.expiresAt,
+  };
 };
 
 export const clearWalletSessionToken = (walletAddress?: string | null): void => {
@@ -84,13 +94,16 @@ export const getWalletSessionToken = async (wallet: WalletContextState): Promise
     return stored.token;
   }
 
-  const message = buildWalletSessionMessage(wallet.address);
-  const signature = await signAleoWalletMessage(wallet, message);
-  const session = await createWalletSession(wallet.address, message, signature);
-  persistSession(wallet.address, {
-    token: session.token,
-    expiresAt: session.expiresAt,
-  });
-
-  return session.token;
+  try {
+    const session = await requestWalletSession(wallet, "InnerCircle wallet session");
+    persistSession(wallet.address, session);
+    return session.token;
+  } catch (error) {
+    if (error instanceof ApiError && /invalid wallet session message prefix/i.test(error.message)) {
+      const session = await requestWalletSession(wallet, "OnlyAleo wallet session");
+      persistSession(wallet.address, session);
+      return session.token;
+    }
+    throw error;
+  }
 };
