@@ -56,6 +56,13 @@ const formatCredits = (microcredits: string | null): string => {
   return `${(value / 1_000_000).toFixed(2)} credits / month`;
 };
 
+const formatTierCredits = (credits: number): string => {
+  if (!Number.isFinite(credits) || credits <= 0) {
+    return "Free access";
+  }
+  return `${credits.toFixed(2)} credits / month`;
+};
+
 const formatWalletError = (message: string): string => {
   if (/no selected account/i.test(message)) {
     return "Wallet account is not selected. Open wallet extension, select account, reconnect, and retry.";
@@ -314,9 +321,45 @@ export default function CreatorPage({ params }: CreatorPageProps) {
   const color = accentColor(creator.handle);
   const initials = getInitials(creator);
   const subscriptionLabel = formatCredits(creator.subscriptionPriceMicrocredits);
+  const baseCreditsRaw = Number(creator.subscriptionPriceMicrocredits ?? "0");
+  const baseCredits = Number.isFinite(baseCreditsRaw) ? baseCreditsRaw / 1_000_000 : 0;
   const activeUntilLabel = subscriptionActiveUntil
     ? new Date(subscriptionActiveUntil).toLocaleString()
     : null;
+  const walletBadgeLabel = hasSubscription
+    ? "Subscriber"
+    : walletRole === "creator"
+      ? "Creator wallet"
+      : walletRole === "user"
+        ? "Fan wallet"
+        : "Wallet connected";
+  const tiers = [
+    {
+      id: "supporter",
+      name: "Supporter",
+      multiplier: 1,
+      icon: "S",
+      tag: "On-chain",
+      perks: ["Early access posts", "Community chat", "Monthly highlights"],
+    },
+    {
+      id: "inner",
+      name: "Inner Circle",
+      multiplier: 1.4,
+      icon: "I",
+      tag: "Preview",
+      perks: ["Everything in Supporter", "Behind-the-scenes", "Monthly Q&A"],
+      highlight: true,
+    },
+    {
+      id: "vip",
+      name: "VIP",
+      multiplier: 1.8,
+      icon: "V",
+      tag: "Preview",
+      perks: ["Everything in Inner Circle", "Direct creator access", "Founders badge"],
+    },
+  ];
 
   return (
     <main className="creator-page">
@@ -349,6 +392,11 @@ export default function CreatorPage({ params }: CreatorPageProps) {
             {creator.bio ? <p className="t-sm t-muted">{creator.bio}</p> : null}
             <div className="row row-2">
               <span className="badge badge--locked">Private Channel</span>
+              {connected ? (
+                <span className={`badge badge--dot ${hasSubscription ? "badge--secure" : "badge--neutral"}`}>
+                  {walletBadgeLabel}
+                </span>
+              ) : null}
             </div>
           </div>
         </div>
@@ -356,6 +404,47 @@ export default function CreatorPage({ params }: CreatorPageProps) {
 
       <div className="creator-content-grid">
         <div className="stack stack-4">
+          <div className="card card--panel tier-panel">
+            <div className="tier-panel__header">
+              <div>
+                <p className="dashboard__panel-title">Subscription tiers</p>
+                <p className="t-xs t-dim">Support the creator and unlock the private feed.</p>
+              </div>
+              {hasSubscription ? <span className="badge badge--secure badge--dot">Active</span> : null}
+            </div>
+            <div className="tier-grid">
+              {tiers.map((tier) => {
+                const price = baseCredits > 0 ? baseCredits * tier.multiplier : 0;
+                const tagLabel = baseCredits > 0 ? tier.tag : "Free";
+                return (
+                  <div key={tier.id} className={`tier-card${tier.highlight ? " tier-card--primary" : ""}`}>
+                    <div className="tier-card__header">
+                      <span className={`tier-card__icon tier-card__icon--${tier.id}`}>{tier.icon}</span>
+                      <div className="tier-card__meta">
+                        <span className="tier-card__name">{tier.name}</span>
+                        <span className="tier-card__price">{formatTierCredits(price)}</span>
+                      </div>
+                    </div>
+                    <div className="tier-card__perks">
+                      {tier.perks.map((perk) => (
+                        <span key={`${tier.id}-${perk}`} className="tier-card__perk">
+                          {perk}
+                        </span>
+                      ))}
+                    </div>
+                    <span className={`tier-card__tag${tagLabel === "On-chain" ? " tier-card__tag--live" : ""}`}>
+                      {tagLabel}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="t-xs t-dim" style={{ marginTop: "var(--s2)" }}>
+              {baseCredits > 0
+                ? "All tiers unlock the same private feed today. Multi-tier payments are coming next."
+                : "Subscriptions are currently free. Paid tiers light up once the creator sets a price."}
+            </p>
+          </div>
           <div>
             <p className="dashboard__panel-title">
               Content {creator.contents.length > 0 ? `· ${creator.contents.length} items` : ""}
