@@ -334,6 +334,7 @@ export default function CreatorDashboardPage() {
           <h2 style={{ fontSize: "2rem", marginBottom: "var(--s4)" }}>Quick Actions</h2>
           <div className="stack stack-2">
             <ActionRow href="/creator-studio/upload" title="Upload New Content" detail="Add new premium video, image, or audio drops." primary />
+            <ActionRow href="/creator-studio/tiers" title="Manage Tiers" detail="Create, edit, and price membership levels." />
             <ActionRow href="/creator-studio/profile" title="Edit Profile" detail="Update your public identity, wallet address, and subscription price." />
             {handle ? (
               <ActionRow href={`/creator/${handle}`} title="View Public Profile" detail="See exactly how your creator page looks to fans." />

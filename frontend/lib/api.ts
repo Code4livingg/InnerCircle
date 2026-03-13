@@ -66,6 +66,53 @@ const postJsonWithHeaders = async <T>(path: string, body: unknown, headers: Head
   return (await res.json()) as T;
 };
 
+const patchJsonWithHeaders = async <T>(path: string, body: unknown, headers: HeadersInit): Promise<T> => {
+  const res = await fetch(toApiUrl(path), {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...headers,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    return throwApiError(res);
+  }
+
+  return (await res.json()) as T;
+};
+
+const putJsonWithHeaders = async <T>(path: string, body: unknown, headers: HeadersInit): Promise<T> => {
+  const res = await fetch(toApiUrl(path), {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      ...headers,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    return throwApiError(res);
+  }
+
+  return (await res.json()) as T;
+};
+
+const deleteJsonWithHeaders = async <T>(path: string, headers: HeadersInit): Promise<T> => {
+  const res = await fetch(toApiUrl(path), {
+    method: "DELETE",
+    headers,
+  });
+
+  if (!res.ok) {
+    return throwApiError(res);
+  }
+
+  return (await res.json()) as T;
+};
+
 const getJson = async <T>(path: string): Promise<T> => {
   const res = await fetch(toApiUrl(path), { cache: "no-store" });
   if (!res.ok) {
@@ -100,6 +147,16 @@ export interface Creator {
   followerCount?: number;
 }
 
+export interface SubscriptionTier {
+  id: string;
+  tierName: string;
+  priceMicrocredits: string;
+  description: string | null;
+  benefits: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type ContentAccessType = "PUBLIC" | "SUBSCRIPTION" | "PPV";
 
 export interface Content {
@@ -110,6 +167,7 @@ export interface Content {
   kind: string;
   accessType: ContentAccessType;
   ppvPriceMicrocredits: string | null;
+  subscriptionTierId?: string | null;
   isPublished: boolean;
   thumbObjectKey: string | null;
   createdAt: string;
@@ -133,6 +191,11 @@ export interface ContentDetails extends Content {
     subscriptionPriceMicrocredits: string;
     isVerified: boolean;
   };
+  subscriptionTier?: {
+    id: string;
+    tierName: string;
+    priceMicrocredits: string;
+  } | null;
 }
 
 export interface DiscoverContent extends Content {
@@ -165,12 +228,24 @@ export interface CreatorAnalyticsResponse {
     monthlyRevenueMicrocredits: string;
     subscriptionRevenueMicrocredits: string;
     ppvRevenueMicrocredits: string;
+    tipRevenueMicrocredits: string;
+    monthlyTipRevenueMicrocredits: string;
+    contentViewCount: number;
+    monthlyContentViewCount: number;
+    churnRate: number;
     publicPostCount: number;
     subscriptionPostCount: number;
     ppvPostCount: number;
     totalContentCount: number;
     publishedContentCount: number;
   };
+  series: Array<{
+    date: string;
+    subscriptionRevenueMicrocredits: string;
+    ppvRevenueMicrocredits: string;
+    tipRevenueMicrocredits: string;
+    contentViews: number;
+  }>;
 }
 
 export interface FanProfileResponse {
@@ -195,6 +270,8 @@ export interface PaymentVerificationResponse {
   contentId?: string;
   contentFieldId?: string;
   priceMicrocredits: string;
+  tierId?: string | null;
+  tierName?: string | null;
   verifiedAt: string;
 }
 
@@ -206,6 +283,9 @@ export interface SubscriptionStatusResponse {
   verifiedAt: string | null;
   activeUntil: string | null;
   priceMicrocredits: string;
+  tierId: string | null;
+  tierName: string | null;
+  tierPriceMicrocredits: string | null;
 }
 
 export interface CreateSessionResponse {
@@ -276,6 +356,29 @@ export interface LiveStream {
   };
 }
 
+export interface TipEntry {
+  id: string;
+  creatorHandle?: string;
+  creatorName?: string;
+  amountMicrocredits: string;
+  message: string | null;
+  isAnonymous: boolean;
+  supporter?: string;
+  createdAt: string;
+}
+
+export interface TipLeaderboardEntry {
+  supporter: string;
+  tipCount: number;
+  totalMicrocredits: string;
+}
+
+export interface CreatorVerificationStatus {
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  submittedAt: string | null;
+  reviewedAt: string | null;
+}
+
 export interface CreateLiveStreamResponse {
   liveStreamId: string;
   ingestEndpoint: string;
@@ -309,6 +412,7 @@ export type VerifyPurchaseRequest =
     txId: string;
     creatorHandle: string;
     walletAddressHint?: string;
+    tierId?: string;
   }
   | {
     kind: "ppv";
@@ -345,6 +449,7 @@ export type CreateSessionRequest =
     creatorHandle: string;
     purchaseTxId: string;
     walletAddressHint?: string;
+    tierId?: string;
   };
 
 export interface StartSessionRequest {
@@ -365,6 +470,92 @@ export const fetchCreatorByHandle = (handle: string): Promise<{ creator: Creator
 
 export const fetchCreatorByWallet = (walletAddress: string): Promise<{ creator: CreatorWithContent }> =>
   getJson(`/api/creators/by-wallet/${encodeURIComponent(walletAddress)}`);
+
+export const fetchSubscriptionTiers = (creatorHandle: string): Promise<{ tiers: SubscriptionTier[] }> =>
+  getJson(`/api/tiers/creator/${encodeURIComponent(creatorHandle)}`);
+
+export const fetchMySubscriptionTiers = (walletToken: string): Promise<{ tiers: SubscriptionTier[] }> =>
+  getJsonWithHeaders("/api/tiers/mine", {
+    Authorization: `Bearer ${walletToken}`,
+  });
+
+export const createSubscriptionTier = (
+  body: {
+    tierName: string;
+    priceMicrocredits: string | number | bigint;
+    description?: string;
+    benefits?: string[];
+  },
+  walletToken: string,
+): Promise<{ tier: SubscriptionTier }> =>
+  postJsonWithHeaders("/api/tiers", body, {
+    Authorization: `Bearer ${walletToken}`,
+  });
+
+export const updateSubscriptionTier = (
+  tierId: string,
+  body: {
+    tierName?: string;
+    priceMicrocredits?: string | number | bigint;
+    description?: string;
+    benefits?: string[];
+  },
+  walletToken: string,
+): Promise<{ tier: SubscriptionTier }> =>
+  putJsonWithHeaders(`/api/tiers/${encodeURIComponent(tierId)}`, body, {
+    Authorization: `Bearer ${walletToken}`,
+  });
+
+export const deleteSubscriptionTier = (tierId: string, walletToken: string): Promise<{ ok: boolean; tierId: string }> =>
+  deleteJsonWithHeaders(`/api/tiers/${encodeURIComponent(tierId)}`, {
+    Authorization: `Bearer ${walletToken}`,
+  });
+
+export const createTip = (
+  body: {
+    creatorHandle: string;
+    amountMicrocredits: string | number | bigint;
+    message?: string;
+    isAnonymous?: boolean;
+  },
+  walletToken: string,
+): Promise<{ tip: TipEntry }> =>
+  postJsonWithHeaders("/api/tips", body, {
+    Authorization: `Bearer ${walletToken}`,
+  });
+
+export const fetchCreatorTipHistory = (creatorHandle: string, walletToken: string): Promise<{ tips: TipEntry[] }> =>
+  getJsonWithHeaders(`/api/tips/creator/${encodeURIComponent(creatorHandle)}`, {
+    Authorization: `Bearer ${walletToken}`,
+  });
+
+export const fetchTipHistory = (walletToken: string): Promise<{ tips: TipEntry[] }> =>
+  getJsonWithHeaders("/api/tips/history", {
+    Authorization: `Bearer ${walletToken}`,
+  });
+
+export const fetchTipLeaderboard = (creatorHandle: string): Promise<{ supporters: TipLeaderboardEntry[] }> =>
+  getJson(`/api/tips/leaderboard/${encodeURIComponent(creatorHandle)}`);
+
+export const submitCreatorVerification = (
+  body: { documentsSubmitted?: string[]; notes?: string },
+  walletToken: string,
+): Promise<{ verification: { id: string; status: string; submittedAt: string } }> =>
+  postJsonWithHeaders("/api/verifications/submit", body, {
+    Authorization: `Bearer ${walletToken}`,
+  });
+
+export const fetchCreatorVerificationStatus = (creatorHandle: string): Promise<CreatorVerificationStatus> =>
+  getJson(`/api/verifications/${encodeURIComponent(creatorHandle)}`);
+
+export const updateContentMetadata = (
+  contentId: string,
+  body: { subscriptionTierId?: string | null; isPublished?: boolean },
+  walletToken: string,
+): Promise<{ content: { id: string; subscriptionTierId: string | null; isPublished: boolean } }> =>
+  patchJsonWithHeaders(`/api/content/${encodeURIComponent(contentId)}`, body, {
+    Authorization: `Bearer ${walletToken}`,
+  });
 
 export const fetchContentById = (contentId: string): Promise<{ content: ContentDetails }> =>
   getJson(`/api/content/${contentId}`);

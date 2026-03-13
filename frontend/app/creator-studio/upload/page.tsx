@@ -3,8 +3,9 @@
 import { useState, useRef, useEffect } from "react";
 import { toApiUrl } from "@/lib/apiBase";
 import { useWallet } from "@/lib/walletContext";
-import { fetchCreatorByWallet } from "../../../lib/api";
+import { fetchCreatorByWallet, fetchSubscriptionTiers, type SubscriptionTier } from "../../../lib/api";
 import { claimWalletRoleWithBackend, WalletRoleConflictError } from "../../../lib/walletRole";
+import { getWalletSessionToken } from "../../../lib/walletSession";
 
 export default function UploadPage() {
     const { address } = useWallet();
@@ -17,6 +18,7 @@ export default function UploadPage() {
     const [error, setError] = useState<string | null>(null);
     const fileRef = useRef<HTMLInputElement>(null);
     const thumbRef = useRef<HTMLInputElement>(null);
+    const [tiers, setTiers] = useState<SubscriptionTier[]>([]);
 
     const [form, setForm] = useState({
         walletAddress: "",
@@ -25,6 +27,7 @@ export default function UploadPage() {
         kind: "VIDEO",
         accessType: "subscription",
         ppvPrice: "",
+        subscriptionTierId: "",
     });
 
     // Auto-fill wallet address when wallet connects
@@ -43,6 +46,8 @@ export default function UploadPage() {
                 await claimWalletRoleWithBackend(address, "creator");
                 const data = await fetchCreatorByWallet(address);
                 localStorage.setItem("innercircle_creator_handle", data.creator.handle);
+                const tierData = await fetchSubscriptionTiers(data.creator.handle);
+                setTiers(tierData.tiers);
             } catch (err) {
                 if (err instanceof WalletRoleConflictError) {
                     setError(`This wallet is locked as ${err.existingRole}. Use a different wallet for ${err.requestedRole}.`);
@@ -56,7 +61,11 @@ export default function UploadPage() {
     }, [address]);
 
     const update = (field: string, value: string) =>
-        setForm((prev) => ({ ...prev, [field]: value }));
+        setForm((prev) => ({
+            ...prev,
+            [field]: value,
+            ...(field === "accessType" && value === "ppv" ? { subscriptionTierId: "" } : null),
+        }));
 
     const handleDrop = (e: React.DragEvent) => {
         e.preventDefault();
@@ -88,11 +97,22 @@ export default function UploadPage() {
             body.append("title", form.title);
             if (form.description) body.append("description", form.description);
             body.append("kind", form.kind);
+            body.append("accessType", form.accessType === "ppv" ? "PPV" : "SUBSCRIPTION");
             if (form.accessType === "ppv" && form.ppvPrice) {
                 body.append("ppvPriceMicrocredits", String(Math.round(parseFloat(form.ppvPrice) * 1_000_000)));
             }
+            if (form.accessType === "subscription" && form.subscriptionTierId) {
+                body.append("subscriptionTierId", form.subscriptionTierId);
+            }
 
-            const res = await fetch(toApiUrl("/api/content/upload"), { method: "POST", body });
+            const token = await getWalletSessionToken(wallet);
+            const res = await fetch(toApiUrl("/api/content/upload"), {
+                method: "POST",
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                },
+                body,
+            });
 
             const contentType = res.headers.get("content-type") ?? "";
             let payload: { error?: string } = {};
@@ -236,6 +256,26 @@ export default function UploadPage() {
                             </select>
                         </div>
                     </div>
+
+                    {form.accessType === "subscription" && tiers.length > 0 && (
+                        <div className="form-group">
+                            <label className="form-label">Subscription Tier</label>
+                            <select
+                                className="form-select"
+                                value={form.subscriptionTierId}
+                                onChange={(e) => update("subscriptionTierId", e.target.value)}
+                                id="upload-tier"
+                            >
+                                <option value="">All subscribers</option>
+                                {tiers.map((tier) => (
+                                    <option key={tier.id} value={tier.id}>
+                                        {tier.tierName} Â· {(Number(tier.priceMicrocredits) / 1_000_000).toFixed(2)} credits
+                                    </option>
+                                ))}
+                            </select>
+                            <span className="form-hint">Assign this content to a specific tier.</span>
+                        </div>
+                    )}
 
                     {form.accessType === "ppv" && (
                         <div className="form-group">

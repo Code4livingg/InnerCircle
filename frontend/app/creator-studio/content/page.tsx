@@ -3,12 +3,17 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useWallet } from "@/lib/walletContext";
-import { fetchCreatorByWallet, type Content } from "../../../lib/api";
+import { fetchCreatorByWallet, fetchSubscriptionTiers, updateContentMetadata, type Content, type SubscriptionTier } from "../../../lib/api";
+import { getWalletSessionToken } from "../../../lib/walletSession";
 
 export default function MyContentPage() {
-    const { address } = useWallet();
+    const wallet = useWallet();
+    const { address } = wallet;
     const [contents, setContents] = useState<Content[]>([]);
     const [loading, setLoading] = useState(true);
+    const [tiers, setTiers] = useState<SubscriptionTier[]>([]);
+    const [savingId, setSavingId] = useState<string | null>(null);
+    const [saveError, setSaveError] = useState<string | null>(null);
 
     useEffect(() => {
         const loadContents = async () => {
@@ -21,6 +26,8 @@ export default function MyContentPage() {
                 const data = await fetchCreatorByWallet(address);
                 setContents(data.creator.contents);
                 localStorage.setItem("innercircle_creator_handle", data.creator.handle);
+                const tierData = await fetchSubscriptionTiers(data.creator.handle);
+                setTiers(tierData.tiers);
             } catch {
                 setContents([]);
             } finally {
@@ -30,6 +37,29 @@ export default function MyContentPage() {
 
         void loadContents();
     }, [address]);
+
+    const handleTierChange = async (contentId: string, nextTierId: string) => {
+        if (!address) return;
+        setSavingId(contentId);
+        setSaveError(null);
+        try {
+            const token = await getWalletSessionToken(wallet);
+            const updated = await updateContentMetadata(
+                contentId,
+                { subscriptionTierId: nextTierId || null },
+                token,
+            );
+            setContents((prev) =>
+                prev.map((item) =>
+                    item.id === contentId ? { ...item, subscriptionTierId: updated.content.subscriptionTierId } : item,
+                ),
+            );
+        } catch (error) {
+            setSaveError((error as Error).message || "Failed to update tier.");
+        } finally {
+            setSavingId(null);
+        }
+    };
 
     return (
         <div style={{ padding: "var(--s4) 0" }}>
@@ -65,6 +95,11 @@ export default function MyContentPage() {
 
             {!loading && contents.length > 0 && (
                 <div className="stack stack-2">
+                    {saveError && (
+                        <div className="card card--panel" style={{ borderColor: "var(--c-error)" }}>
+                            <p className="t-sm t-error">{saveError}</p>
+                        </div>
+                    )}
                     {contents.map((item) => (
                         <div key={item.id} className="card" style={{ padding: "var(--s3)" }}>
                             <div className="row" style={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s2)" }}>
@@ -86,6 +121,25 @@ export default function MyContentPage() {
                                     </span>
                                 </div>
                             </div>
+                            {item.accessType === "SUBSCRIPTION" && (
+                                <div className="row row-2" style={{ marginTop: "var(--s2)" }}>
+                                    <span className="t-xs t-dim">Tier</span>
+                                    <select
+                                        className="form-select"
+                                        value={item.subscriptionTierId ?? ""}
+                                        onChange={(e) => handleTierChange(item.id, e.target.value)}
+                                        disabled={savingId === item.id}
+                                        style={{ minWidth: 220 }}
+                                    >
+                                        <option value="">All subscribers</option>
+                                        {tiers.map((tier) => (
+                                            <option key={tier.id} value={tier.id}>
+                                                {tier.tierName} Â· {(Number(tier.priceMicrocredits) / 1_000_000).toFixed(2)} credits
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                            )}
                         </div>
                     ))}
                 </div>

@@ -18,6 +18,12 @@ enum ContentAccessType {
   PPV
 }
 
+enum VerificationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 // ── Creator ──────────────────────────────────────────────────────────────────
 // Registered via POST /api/creators/register (walletAddress + handle)
 model Creator {
@@ -37,6 +43,9 @@ model Creator {
   liveStreams LiveStream[]
   subscriptionPurchases SubscriptionPurchase[]
   followers CreatorFollow[]
+  subscriptionTiers SubscriptionTier[]
+  tips Tip[]
+  verification CreatorVerification?
 
   @@index([handle])
 }
@@ -81,6 +90,8 @@ model Content {
   id               String   @id @default(uuid()) @db.Uuid
   creatorId        String   @db.Uuid
   creator          Creator  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  subscriptionTierId String? @db.Uuid
+  subscriptionTier  SubscriptionTier? @relation(fields: [subscriptionTierId], references: [id], onDelete: SetNull)
 
   contentFieldId   String   @unique          // random Aleo field literal
   title            String
@@ -115,6 +126,7 @@ model Content {
 
   @@index([creatorId])
   @@index([isPublished])
+  @@index([subscriptionTierId])
 }
 
 // ── ContentChunk ─────────────────────────────────────────────────────────────
@@ -158,6 +170,8 @@ model SubscriptionPurchase {
   walletHash         String
   creatorId          String   @db.Uuid
   creator            Creator  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  subscriptionTierId String?  @db.Uuid
+  subscriptionTier   SubscriptionTier? @relation(fields: [subscriptionTierId], references: [id], onDelete: SetNull)
   creatorFieldId     String
   priceMicrocredits  BigInt
   verifiedAt         DateTime @default(now())
@@ -165,6 +179,7 @@ model SubscriptionPurchase {
 
   @@index([creatorId])
   @@index([walletHash])
+  @@index([subscriptionTierId])
 }
 
 model PpvPurchase {
@@ -180,6 +195,49 @@ model PpvPurchase {
 
   @@index([contentId])
   @@index([walletHash])
+}
+
+model SubscriptionTier {
+  id                 String   @id @default(uuid()) @db.Uuid
+  creatorId          String   @db.Uuid
+  creator            Creator  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  tierName           String
+  priceMicrocredits  BigInt
+  description        String?
+  benefits           String[]
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  contents           Content[]
+  purchases          SubscriptionPurchase[]
+
+  @@index([creatorId])
+  @@unique([creatorId, tierName])
+}
+
+model Tip {
+  id                 String   @id @default(uuid()) @db.Uuid
+  creatorId          String   @db.Uuid
+  creator            Creator  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  walletHash         String
+  amountMicrocredits BigInt
+  message            String?
+  isAnonymous        Boolean  @default(false)
+  createdAt          DateTime @default(now())
+
+  @@index([creatorId])
+  @@index([walletHash])
+}
+
+model CreatorVerification {
+  id                 String   @id @default(uuid()) @db.Uuid
+  creatorId          String   @unique @db.Uuid
+  creator            Creator  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  verificationStatus VerificationStatus @default(PENDING)
+  documentsSubmitted String?
+  reviewedAt         DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 }
 
 model LiveStream {

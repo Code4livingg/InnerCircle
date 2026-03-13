@@ -39,6 +39,14 @@ const getMonthStart = (): Date => {
   return new Date(now.getFullYear(), now.getMonth(), 1);
 };
 
+const getSeriesStart = (): Date => {
+  const now = new Date();
+  const start = new Date(now);
+  start.setDate(now.getDate() - 29);
+  start.setHours(0, 0, 0, 0);
+  return start;
+};
+
 const sumMaybeBigInts = (values: Array<bigint | null | undefined>): bigint =>
   values.reduce<bigint>((total, value) => total + (value ?? 0n), 0n);
 
@@ -157,6 +165,7 @@ export const getCreatorByHandle = async (req: Request, res: Response): Promise<v
             ppvPriceMicrocredits: true,
             isPublished: true,
             thumbObjectKey: true,
+            subscriptionTierId: true,
             createdAt: true,
           },
         },
@@ -207,6 +216,7 @@ export const getCreatorByWalletAddress = async (req: Request, res: Response): Pr
             ppvPriceMicrocredits: true,
             isPublished: true,
             thumbObjectKey: true,
+            subscriptionTierId: true,
             createdAt: true,
           },
         },
@@ -289,6 +299,9 @@ export const getCreatorAnalyticsByWalletAddress = async (req: Request, res: Resp
 
     const activeSubscriptionCutoff = getActiveSubscriptionCutoff();
     const monthStart = getMonthStart();
+    const previousActiveStart = new Date(Date.now() - THIRTY_DAYS_MS * 2);
+    const previousActiveEnd = new Date(Date.now() - THIRTY_DAYS_MS);
+    const seriesStart = getSeriesStart();
 
     const [
       followerCount,
@@ -298,6 +311,15 @@ export const getCreatorAnalyticsByWalletAddress = async (req: Request, res: Resp
       monthlySubscriptionRevenueAgg,
       ppvRevenueAgg,
       monthlyPpvRevenueAgg,
+      tipRevenueAgg,
+      monthlyTipRevenueAgg,
+      contentViewCount,
+      monthlyContentViewCount,
+      previousActiveSubscriptions,
+      subscriptionSeries,
+      ppvSeries,
+      tipSeries,
+      viewSeries,
     ] = await Promise.all([
       prisma.creatorFollow.count({ where: { creatorId: creator.id } }),
       prisma.subscriptionPurchase.findMany({
@@ -337,6 +359,66 @@ export const getCreatorAnalyticsByWalletAddress = async (req: Request, res: Resp
         },
         _sum: { priceMicrocredits: true },
       }),
+      prisma.tip.aggregate({
+        where: { creatorId: creator.id },
+        _sum: { amountMicrocredits: true },
+      }),
+      prisma.tip.aggregate({
+        where: { creatorId: creator.id, createdAt: { gte: monthStart } },
+        _sum: { amountMicrocredits: true },
+      }),
+      prisma.streamEvent.count({
+        where: { content: { creatorId: creator.id } },
+      }),
+      prisma.streamEvent.count({
+        where: { content: { creatorId: creator.id }, createdAt: { gte: monthStart } },
+      }),
+      prisma.subscriptionPurchase.findMany({
+        where: {
+          creatorId: creator.id,
+          verifiedAt: { gte: previousActiveStart, lt: previousActiveEnd },
+        },
+        distinct: ["walletHash"],
+        select: { walletHash: true },
+      }),
+      prisma.$queryRaw<Array<{ day: Date; total: bigint | null }>>`
+        SELECT date_trunc('day', "verifiedAt") AS day,
+               SUM("priceMicrocredits") AS total
+        FROM "SubscriptionPurchase"
+        WHERE "creatorId" = ${creator.id}
+          AND "verifiedAt" >= ${seriesStart}
+        GROUP BY day
+        ORDER BY day
+      `,
+      prisma.$queryRaw<Array<{ day: Date; total: bigint | null }>>`
+        SELECT date_trunc('day', p."verifiedAt") AS day,
+               SUM(p."priceMicrocredits") AS total
+        FROM "PpvPurchase" p
+        JOIN "Content" c ON p."contentId" = c."id"
+        WHERE c."creatorId" = ${creator.id}
+          AND p."verifiedAt" >= ${seriesStart}
+        GROUP BY day
+        ORDER BY day
+      `,
+      prisma.$queryRaw<Array<{ day: Date; total: bigint | null }>>`
+        SELECT date_trunc('day', "createdAt") AS day,
+               SUM("amountMicrocredits") AS total
+        FROM "Tip"
+        WHERE "creatorId" = ${creator.id}
+          AND "createdAt" >= ${seriesStart}
+        GROUP BY day
+        ORDER BY day
+      `,
+      prisma.$queryRaw<Array<{ day: Date; total: bigint | null }>>`
+        SELECT date_trunc('day', s."createdAt") AS day,
+               COUNT(*)::bigint AS total
+        FROM "StreamEvent" s
+        JOIN "Content" c ON s."contentId" = c."id"
+        WHERE c."creatorId" = ${creator.id}
+          AND s."createdAt" >= ${seriesStart}
+        GROUP BY day
+        ORDER BY day
+      `,
     ]);
 
     const publicPosts = creator.contents.filter((content) => content.accessType === "PUBLIC");
@@ -346,11 +428,54 @@ export const getCreatorAnalyticsByWalletAddress = async (req: Request, res: Resp
     const totalRevenueMicrocredits = sumMaybeBigInts([
       subscriptionRevenueAgg._sum.priceMicrocredits,
       ppvRevenueAgg._sum.priceMicrocredits,
+      tipRevenueAgg._sum.amountMicrocredits,
     ]);
     const monthlyRevenueMicrocredits = sumMaybeBigInts([
       monthlySubscriptionRevenueAgg._sum.priceMicrocredits,
       monthlyPpvRevenueAgg._sum.priceMicrocredits,
+      monthlyTipRevenueAgg._sum.amountMicrocredits,
     ]);
+    const churnRate =
+      previousActiveSubscriptions.length > 0
+        ? Math.max(
+            0,
+            (previousActiveSubscriptions.length - activeSubscriptions.length) / previousActiveSubscriptions.length,
+          )
+        : 0;
+
+    const toSeriesMap = (rows: Array<{ day: Date; total: bigint | null }>): Map<string, bigint> =>
+      new Map(
+        rows.map((row) => [
+          new Date(row.day).toISOString().slice(0, 10),
+          row.total ?? 0n,
+        ]),
+      );
+
+    const subscriptionMap = toSeriesMap(subscriptionSeries);
+    const ppvMap = toSeriesMap(ppvSeries);
+    const tipMap = toSeriesMap(tipSeries);
+    const viewMap = toSeriesMap(viewSeries);
+
+    const series: Array<{
+      date: string;
+      subscriptionRevenueMicrocredits: string;
+      ppvRevenueMicrocredits: string;
+      tipRevenueMicrocredits: string;
+      contentViews: number;
+    }> = [];
+
+    for (let i = 0; i < 30; i += 1) {
+      const day = new Date(seriesStart);
+      day.setDate(seriesStart.getDate() + i);
+      const key = day.toISOString().slice(0, 10);
+      series.push({
+        date: key,
+        subscriptionRevenueMicrocredits: (subscriptionMap.get(key) ?? 0n).toString(),
+        ppvRevenueMicrocredits: (ppvMap.get(key) ?? 0n).toString(),
+        tipRevenueMicrocredits: (tipMap.get(key) ?? 0n).toString(),
+        contentViews: Number(viewMap.get(key) ?? 0n),
+      });
+    }
 
     res.json({
       creator: {
@@ -367,12 +492,18 @@ export const getCreatorAnalyticsByWalletAddress = async (req: Request, res: Resp
         monthlyRevenueMicrocredits: monthlyRevenueMicrocredits.toString(),
         subscriptionRevenueMicrocredits: (subscriptionRevenueAgg._sum.priceMicrocredits ?? 0n).toString(),
         ppvRevenueMicrocredits: (ppvRevenueAgg._sum.priceMicrocredits ?? 0n).toString(),
+        tipRevenueMicrocredits: (tipRevenueAgg._sum.amountMicrocredits ?? 0n).toString(),
+        monthlyTipRevenueMicrocredits: (monthlyTipRevenueAgg._sum.amountMicrocredits ?? 0n).toString(),
+        contentViewCount,
+        monthlyContentViewCount,
+        churnRate,
         publicPostCount: publicPosts.length,
         subscriptionPostCount: subscriptionPosts.length,
         ppvPostCount: ppvPosts.length,
         totalContentCount: creator.contents.length,
         publishedContentCount: creator.contents.filter((content) => content.isPublished).length,
       },
+      series,
     });
   } catch (error) {
     if (isDatabaseUnavailableError(error)) {
@@ -385,4 +516,19 @@ export const getCreatorAnalyticsByWalletAddress = async (req: Request, res: Resp
 
     res.status(400).json({ error: (error as Error).message });
   }
+};
+
+export const getCreatorAnalytics = async (req: Request, res: Response): Promise<void> => {
+  const walletAddress =
+    typeof req.query.walletAddress === "string" && req.query.walletAddress.trim().length > 0
+      ? req.query.walletAddress.trim()
+      : "";
+
+  if (!walletAddress) {
+    res.status(400).json({ error: "walletAddress query parameter is required." });
+    return;
+  }
+
+  req.params = { walletAddress };
+  return getCreatorAnalyticsByWalletAddress(req, res);
 };

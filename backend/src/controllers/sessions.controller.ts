@@ -15,6 +15,7 @@ import {
 import { ensureWalletRoleByHash, toClientRole, WalletRoleConflictError } from "../services/walletRoleService.js";
 import { DB_UNAVAILABLE_CODE, DB_UNAVAILABLE_MESSAGE, isDatabaseUnavailableError } from "../utils/dbErrors.js";
 import { walletHashForAddress } from "../services/walletRoleService.js";
+import { getSubscriptionActiveUntil } from "../services/subscriptionService.js";
 
 const proofSchema = z.union([
   z.string().min(10),
@@ -54,6 +55,7 @@ const sessionSchema = z.discriminatedUnion("mode", [
     creatorHandle: z.string().min(3),
     purchaseTxId: z.string().min(10),
     walletAddressHint: z.string().min(10).optional(),
+    tierId: z.string().uuid().optional(),
   }),
   z.object({
     mode: z.literal("ppv-direct"),
@@ -86,11 +88,6 @@ const extractProofFunctionName = (payload: { proof?: z.infer<typeof proofSchema>
   if (!payload.proof || typeof payload.proof === "string") return undefined;
   return payload.proof.functionName;
 };
-
-const SUBSCRIPTION_TERM_MS = 30 * 24 * 60 * 60 * 1000;
-
-const getSubscriptionActiveUntil = (verifiedAt: Date): Date =>
-  new Date(verifiedAt.getTime() + SUBSCRIPTION_TERM_MS);
 
 const isOnChainAleoTxId = (value: string): boolean =>
   /^at1[0-9a-z]{20,}$/i.test(value.trim());
@@ -139,11 +136,25 @@ export const createAccessSession = async (req: Request, res: Response): Promise<
       });
       if (!creator) { res.status(404).json({ error: "Creator not found" }); return; }
 
+      let tierRecord: { id: string; priceMicrocredits: bigint; creatorId: string } | null = null;
+      if (payload.tierId) {
+        tierRecord = await prisma.subscriptionTier.findUnique({
+          where: { id: payload.tierId },
+          select: { id: true, priceMicrocredits: true, creatorId: true },
+        });
+        if (!tierRecord || tierRecord.creatorId !== creator.id) {
+          res.status(404).json({ error: "Subscription tier not found" });
+          return;
+        }
+      }
+
+      const expectedPriceMicrocredits = tierRecord?.priceMicrocredits ?? creator.subscriptionPriceMicrocredits;
+
       const verified = await verifySubscriptionPayment({
         creatorFieldId: creator.creatorFieldId,
         purchaseTxId: payload.purchaseTxId,
         walletAddressHint: payload.walletAddressHint,
-        expectedPriceMicrocredits: creator.subscriptionPriceMicrocredits,
+        expectedPriceMicrocredits,
         expectedRecipientAddress: creator.walletAddress,
       });
 
@@ -161,10 +172,16 @@ export const createAccessSession = async (req: Request, res: Response): Promise<
         },
         select: {
           verifiedAt: true,
+          subscriptionTierId: true,
         },
       });
       if (!purchase) {
         res.status(409).json({ error: "Subscription payment has not been verified yet.", code: "TX_PENDING" });
+        return;
+      }
+
+      if (payload.tierId && purchase.subscriptionTierId !== payload.tierId) {
+        res.status(409).json({ error: "Subscription tier does not match verified purchase.", code: "TIER_MISMATCH" });
         return;
       }
 

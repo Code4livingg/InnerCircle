@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { toApiUrl } from "@/lib/apiBase";
 import { useWallet } from "@/lib/walletContext";
+import { fetchTipHistory, type TipEntry } from "@/lib/api";
+import { getWalletSessionToken } from "@/lib/walletSession";
 
 type FeedCreator = {
   id: string;
@@ -31,11 +33,14 @@ type FeedContent = {
 };
 
 export default function UserDashboardPage() {
-  const { connected, publicKey } = useWallet();
+  const wallet = useWallet();
+  const { connected, publicKey } = wallet;
 
   const [feedCreators, setFeedCreators] = useState<FeedCreator[]>([]);
   const [feedContents, setFeedContents] = useState<FeedContent[]>([]);
   const [status, setStatus] = useState<string>("");
+  const [tipHistory, setTipHistory] = useState<TipEntry[]>([]);
+  const [tipError, setTipError] = useState<string>("");
 
   const walletAddress = useMemo(() => (connected ? publicKey : null), [connected, publicKey]);
 
@@ -49,6 +54,25 @@ export default function UserDashboardPage() {
 
     run().catch((e) => setStatus((e as Error).message));
   }, []);
+
+  useEffect(() => {
+    const loadTips = async () => {
+      if (!connected || !publicKey) {
+        setTipHistory([]);
+        return;
+      }
+      try {
+        const token = await getWalletSessionToken(wallet);
+        const data = await fetchTipHistory(token);
+        setTipHistory(data.tips);
+        setTipError("");
+      } catch (e) {
+        setTipError((e as Error).message || "Failed to load tip history.");
+      }
+    };
+
+    loadTips().catch(() => undefined);
+  }, [connected, publicKey]);
 
   return (
     <main className="stack">
@@ -79,6 +103,22 @@ export default function UserDashboardPage() {
               <Link href={`/content/${c.id}`}>Open</Link>
             </div>
           ))}
+        </article>
+
+        <article className="card stack">
+          <h3>Tip History</h3>
+          {tipError ? <p className="t-sm t-error">{tipError}</p> : null}
+          {tipHistory.length === 0 ? (
+            <p className="t-sm t-muted">No tips sent yet.</p>
+          ) : (
+            tipHistory.slice(0, 6).map((tip) => (
+              <div key={tip.id} className="stack">
+                <strong>{(Number(tip.amountMicrocredits) / 1_000_000).toFixed(2)} credits</strong>
+                <p>@{tip.creatorHandle}</p>
+                {tip.message ? <p className="t-xs t-dim">{tip.message}</p> : null}
+              </div>
+            ))
+          )}
         </article>
 
         <article className="card stack">

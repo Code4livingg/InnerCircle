@@ -4,15 +4,27 @@ import { prisma } from "../db/prisma.js";
 import { sha256Hex } from "../utils/crypto.js";
 import { deleteMedia, uploadMedia } from "../services/mediaStorageService.js";
 import { randomFieldLiteral } from "../utils/aleo.js";
+import type { WalletSessionRequest } from "../middleware/requireWalletSession.js";
+import { ensureWalletRoleByHash } from "../services/walletRoleService.js";
+
+const accessTypeSchema = z
+  .enum(["PUBLIC", "SUBSCRIPTION", "PPV", "public", "subscription", "ppv"])
+  .transform((value) => value.toUpperCase() as "PUBLIC" | "SUBSCRIPTION" | "PPV");
 
 const uploadSchema = z.object({
   walletAddress: z.string().min(10),
   title: z.string().min(1).max(120),
   description: z.string().max(2000).optional(),
   kind: z.enum(["VIDEO", "IMAGE", "AUDIO"]).default("VIDEO"),
-  accessType: z.enum(["PUBLIC", "SUBSCRIPTION", "PPV"]).optional().default("SUBSCRIPTION"),
+  accessType: accessTypeSchema.optional().default("SUBSCRIPTION"),
   ppvPriceMicrocredits: z.coerce.bigint().nonnegative().optional().default(0n),
+  subscriptionTierId: z.string().uuid().optional(),
   isPublished: z.coerce.boolean().optional().default(false),
+});
+
+const updateSchema = z.object({
+  subscriptionTierId: z.string().uuid().nullable().optional(),
+  isPublished: z.coerce.boolean().optional(),
 });
 
 const walletHash = (address: string): string => sha256Hex(address.toLowerCase());
@@ -55,11 +67,17 @@ const readUploadedThumbnail = (req: Request): Express.Multer.File | undefined =>
   return files.thumbnail?.[0];
 };
 
-export const uploadContent = async (req: Request, res: Response): Promise<void> => {
+export const uploadContent = async (req: WalletSessionRequest, res: Response): Promise<void> => {
   let uploadedMediaKey: string | null = null;
   let uploadedThumbnailKey: string | null = null;
 
   try {
+    const session = req.walletSession;
+    if (!session) {
+      res.status(401).json({ error: "Missing wallet session" });
+      return;
+    }
+
     const uploadedFile = readUploadedFile(req);
     if (!uploadedFile?.buffer) {
       res.status(400).json({ error: "Missing file upload" });
@@ -68,6 +86,10 @@ export const uploadContent = async (req: Request, res: Response): Promise<void> 
 
     const payload = uploadSchema.parse(req.body);
     const wh = walletHash(payload.walletAddress);
+    if (wh !== session.wh) {
+      res.status(403).json({ error: "Wallet session does not match the upload wallet address." });
+      return;
+    }
     const priceMicrocredits = payload.accessType === "PPV" ? payload.ppvPriceMicrocredits : 0n;
 
     if (payload.accessType === "PPV" && priceMicrocredits <= 0n) {
@@ -75,10 +97,30 @@ export const uploadContent = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
+    await ensureWalletRoleByHash(session.wh, "CREATOR");
+
     const creator = await prisma.creator.findUnique({ where: { walletHash: wh } });
     if (!creator) {
       res.status(400).json({ error: "Creator not registered. Call /api/creators/register first." });
       return;
+    }
+
+    let subscriptionTierId: string | null = null;
+    if (payload.subscriptionTierId) {
+      if (payload.accessType !== "SUBSCRIPTION") {
+        res.status(400).json({ error: "Subscription tiers can only be assigned to subscription content." });
+        return;
+      }
+
+      const tier = await prisma.subscriptionTier.findUnique({
+        where: { id: payload.subscriptionTierId },
+        select: { id: true, creatorId: true },
+      });
+      if (!tier || tier.creatorId !== creator.id) {
+        res.status(400).json({ error: "Invalid subscription tier for this creator." });
+        return;
+      }
+      subscriptionTierId = tier.id;
     }
 
     uploadedMediaKey = await uploadMedia(
@@ -101,6 +143,7 @@ export const uploadContent = async (req: Request, res: Response): Promise<void> 
     const content = await prisma.content.create({
       data: {
         creatorId: creator.id,
+        subscriptionTierId,
         contentFieldId: randomFieldLiteral(),
         title: payload.title,
         description: payload.description,
@@ -166,6 +209,13 @@ export const getContent = async (req: Request, res: Response): Promise<void> => 
           isVerified: true,
         },
       },
+      subscriptionTier: {
+        select: {
+          id: true,
+          tierName: true,
+          priceMicrocredits: true,
+        },
+      },
     },
   });
 
@@ -175,4 +225,72 @@ export const getContent = async (req: Request, res: Response): Promise<void> => 
   }
 
   res.json({ content });
+};
+
+export const updateContent = async (req: WalletSessionRequest, res: Response): Promise<void> => {
+  try {
+    const session = req.walletSession;
+    if (!session) {
+      res.status(401).json({ error: "Missing wallet session" });
+      return;
+    }
+
+    const payload = updateSchema.parse(req.body);
+    const contentId = String(req.params.contentId ?? "").trim();
+    if (!contentId) {
+      res.status(400).json({ error: "Missing content id" });
+      return;
+    }
+
+    const creator = await prisma.creator.findUnique({
+      where: { walletHash: session.wh },
+      select: { id: true },
+    });
+    if (!creator) {
+      res.status(404).json({ error: "Creator not found" });
+      return;
+    }
+
+    const content = await prisma.content.findUnique({
+      where: { id: contentId },
+      select: { id: true, creatorId: true },
+    });
+    if (!content || content.creatorId !== creator.id) {
+      res.status(404).json({ error: "Content not found for this creator" });
+      return;
+    }
+
+    let subscriptionTierId = payload.subscriptionTierId;
+    if (subscriptionTierId) {
+      const tier = await prisma.subscriptionTier.findUnique({
+        where: { id: subscriptionTierId },
+        select: { id: true, creatorId: true },
+      });
+      if (!tier || tier.creatorId !== creator.id) {
+        res.status(400).json({ error: "Invalid subscription tier for this creator." });
+        return;
+      }
+    }
+    const updateData: { subscriptionTierId?: string | null; isPublished?: boolean } = {};
+    if ("subscriptionTierId" in payload) {
+      updateData.subscriptionTierId = subscriptionTierId ?? null;
+    }
+    if (typeof payload.isPublished === "boolean") {
+      updateData.isPublished = payload.isPublished;
+    }
+
+    const updated = await prisma.content.update({
+      where: { id: content.id },
+      data: updateData,
+      select: {
+        id: true,
+        subscriptionTierId: true,
+        isPublished: true,
+      },
+    });
+
+    res.json({ content: updated });
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message });
+  }
 };

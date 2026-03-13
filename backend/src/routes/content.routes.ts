@@ -1,6 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
-import { getContent, uploadContent } from "../controllers/content.controller.js";
+import { getContent, updateContent, uploadContent } from "../controllers/content.controller.js";
+import { requireWalletSession } from "../middleware/requireWalletSession.js";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -37,7 +38,8 @@ const uploadContentWithFiles = (req: Parameters<typeof uploadContent>[0], res: P
 
 const contentRouter = Router();
 
-contentRouter.post("/upload", uploadContentWithFiles, uploadContent);
+contentRouter.post("/upload", requireWalletSession, uploadContentWithFiles, uploadContent);
 contentRouter.get("/:contentId", getContent);
+contentRouter.patch("/:contentId", requireWalletSession, updateContent);
 
 export { contentRouter };

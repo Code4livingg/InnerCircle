@@ -10,6 +10,7 @@ import {
   walletHashForAddress,
   WalletRoleConflictError,
 } from "../services/walletRoleService.js";
+import { getSubscriptionActiveUntil } from "../services/subscriptionService.js";
 import { DB_UNAVAILABLE_CODE, DB_UNAVAILABLE_MESSAGE, isDatabaseUnavailableError } from "../utils/dbErrors.js";
 
 const verifySchema = z.discriminatedUnion("kind", [
@@ -18,6 +19,7 @@ const verifySchema = z.discriminatedUnion("kind", [
     txId: z.string().min(10),
     creatorHandle: z.string().min(3),
     walletAddressHint: z.string().min(10).optional(),
+    tierId: z.string().uuid().optional(),
   }),
   z.object({
     kind: z.literal("ppv"),
@@ -31,11 +33,6 @@ const subscriptionStatusSchema = z.object({
   creatorHandle: z.string().min(3),
   walletAddress: z.string().min(10),
 });
-
-const SUBSCRIPTION_TERM_MS = 30 * 24 * 60 * 60 * 1000;
-
-const getSubscriptionActiveUntil = (verifiedAt: Date): Date =>
-  new Date(verifiedAt.getTime() + SUBSCRIPTION_TERM_MS);
 
 const isUuidLike = (value: string): boolean =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
@@ -72,11 +69,25 @@ export const verifySubscriptionOrPpvPurchase = async (req: Request, res: Respons
         return;
       }
 
+      let tierRecord: { id: string; tierName: string; priceMicrocredits: bigint; creatorId: string } | null = null;
+      if (payload.tierId) {
+        tierRecord = await prisma.subscriptionTier.findUnique({
+          where: { id: payload.tierId },
+          select: { id: true, tierName: true, priceMicrocredits: true, creatorId: true },
+        });
+        if (!tierRecord || tierRecord.creatorId !== creator.id) {
+          res.status(404).json({ error: "Subscription tier not found" });
+          return;
+        }
+      }
+
+      const expectedPriceMicrocredits = tierRecord?.priceMicrocredits ?? creator.subscriptionPriceMicrocredits;
+
       const verified = await verifySubscriptionPayment({
         creatorFieldId: creator.creatorFieldId,
         purchaseTxId: payload.txId,
         walletAddressHint: payload.walletAddressHint,
-        expectedPriceMicrocredits: creator.subscriptionPriceMicrocredits,
+        expectedPriceMicrocredits,
         expectedRecipientAddress: creator.walletAddress,
       });
 
@@ -99,6 +110,7 @@ export const verifySubscriptionOrPpvPurchase = async (req: Request, res: Respons
           "walletHash",
           "creatorId",
           "creatorFieldId",
+          "subscriptionTierId",
           "priceMicrocredits",
           "verifiedAt",
           "createdAt"
@@ -109,7 +121,8 @@ export const verifySubscriptionOrPpvPurchase = async (req: Request, res: Respons
           ${verified.walletHash},
           CAST(${creator.id} AS UUID),
           ${creator.creatorFieldId},
-          ${creator.subscriptionPriceMicrocredits},
+          ${tierRecord?.id ?? null},
+          ${expectedPriceMicrocredits},
           NOW(),
           NOW()
         )
@@ -118,6 +131,7 @@ export const verifySubscriptionOrPpvPurchase = async (req: Request, res: Respons
           "walletHash" = EXCLUDED."walletHash",
           "creatorId" = EXCLUDED."creatorId",
           "creatorFieldId" = EXCLUDED."creatorFieldId",
+          "subscriptionTierId" = EXCLUDED."subscriptionTierId",
           "priceMicrocredits" = EXCLUDED."priceMicrocredits",
           "verifiedAt" = NOW()
       `;
@@ -139,7 +153,9 @@ export const verifySubscriptionOrPpvPurchase = async (req: Request, res: Respons
         txId: record.txId,
         creatorHandle: creator.handle,
         creatorFieldId: creator.creatorFieldId,
-        priceMicrocredits: creator.subscriptionPriceMicrocredits.toString(),
+        priceMicrocredits: expectedPriceMicrocredits.toString(),
+        tierId: tierRecord?.id ?? null,
+        tierName: tierRecord?.tierName ?? null,
         verifiedAt: record.verifiedAt.toISOString(),
       });
       return;
@@ -280,9 +296,14 @@ export const getSubscriptionStatus = async (req: Request, res: Response): Promis
         walletHash,
       },
       orderBy: { verifiedAt: "desc" },
-      select: {
-        txId: true,
-        verifiedAt: true,
+      include: {
+        subscriptionTier: {
+          select: {
+            id: true,
+            tierName: true,
+            priceMicrocredits: true,
+          },
+        },
       },
     });
 
@@ -295,11 +316,15 @@ export const getSubscriptionStatus = async (req: Request, res: Response): Promis
         verifiedAt: null,
         activeUntil: null,
         priceMicrocredits: creator.subscriptionPriceMicrocredits.toString(),
+        tierId: null,
+        tierName: null,
+        tierPriceMicrocredits: null,
       });
       return;
     }
 
     const activeUntil = getSubscriptionActiveUntil(latestPurchase.verifiedAt);
+    const tierPriceMicrocredits = latestPurchase.subscriptionTier?.priceMicrocredits ?? latestPurchase.priceMicrocredits;
     res.json({
       ok: true,
       creatorHandle: creator.handle,
@@ -308,6 +333,9 @@ export const getSubscriptionStatus = async (req: Request, res: Response): Promis
       verifiedAt: latestPurchase.verifiedAt.toISOString(),
       activeUntil: activeUntil.toISOString(),
       priceMicrocredits: creator.subscriptionPriceMicrocredits.toString(),
+      tierId: latestPurchase.subscriptionTier?.id ?? null,
+      tierName: latestPurchase.subscriptionTier?.tierName ?? null,
+      tierPriceMicrocredits: tierPriceMicrocredits.toString(),
     });
   } catch (error) {
     if (isDatabaseUnavailableError(error)) {

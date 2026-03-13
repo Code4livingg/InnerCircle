@@ -3,12 +3,13 @@
 import { useEffect, useState } from "react";
 import { toApiUrl } from "@/lib/apiBase";
 import { useWallet } from "@/lib/walletContext";
-import { ApiError, fetchCreatorByWallet } from "../../../lib/api";
+import { ApiError, fetchCreatorByWallet, fetchCreatorVerificationStatus, submitCreatorVerification } from "../../../lib/api";
 import {
     claimWalletRoleWithBackend,
     syncWalletRoleFromBackend,
     WalletRoleConflictError,
 } from "../../../lib/walletRole";
+import { getWalletSessionToken } from "../../../lib/walletSession";
 
 const readApiError = async (res: Response): Promise<string> => {
     const data = (await res.json().catch(() => ({}))) as { error?: string };
@@ -16,7 +17,8 @@ const readApiError = async (res: Response): Promise<string> => {
 };
 
 export default function CreatorProfilePage() {
-    const { address } = useWallet();
+    const wallet = useWallet();
+    const { address } = wallet;
 
     const [hydrating, setHydrating] = useState(true);
     const [loading, setLoading] = useState(false);
@@ -30,6 +32,11 @@ export default function CreatorProfilePage() {
         bio: "",
         subscriptionPrice: "",
     });
+
+    const [verificationStatus, setVerificationStatus] = useState<string | null>(null);
+    const [verificationNotes, setVerificationNotes] = useState("");
+    const [verificationSubmitting, setVerificationSubmitting] = useState(false);
+    const [verificationError, setVerificationError] = useState<string | null>(null);
 
     useEffect(() => {
         const hydrateProfile = async () => {
@@ -76,6 +83,20 @@ export default function CreatorProfilePage() {
 
         void hydrateProfile();
     }, [address]);
+
+    useEffect(() => {
+        const loadVerification = async () => {
+            if (!form.handle) return;
+            try {
+                const status = await fetchCreatorVerificationStatus(form.handle);
+                setVerificationStatus(status.status);
+            } catch {
+                setVerificationStatus(null);
+            }
+        };
+
+        void loadVerification();
+    }, [form.handle]);
 
     const update = (field: string, value: string) =>
         setForm((prev) => ({ ...prev, [field]: value }));
@@ -135,6 +156,30 @@ export default function CreatorProfilePage() {
         }
     };
 
+    const submitVerification = async () => {
+        if (!address) {
+            setVerificationError("Connect your wallet before submitting verification.");
+            return;
+        }
+
+        setVerificationSubmitting(true);
+        setVerificationError(null);
+
+        try {
+            const token = await getWalletSessionToken(wallet);
+            await submitCreatorVerification(
+                { notes: verificationNotes || undefined },
+                token,
+            );
+            setVerificationStatus("PENDING");
+            setVerificationNotes("");
+        } catch (err) {
+            setVerificationError((err as Error).message || "Failed to submit verification.");
+        } finally {
+            setVerificationSubmitting(false);
+        }
+    };
+
     return (
         <div style={{ maxWidth: 560, padding: "var(--s4) 0" }}>
             <div className="stack stack-2" style={{ marginBottom: "var(--s6)" }}>
@@ -174,11 +219,42 @@ export default function CreatorProfilePage() {
                 <div className="form-group">
                     <label className="form-label">Monthly Subscription Price (credits)</label>
                     <input className="form-input" type="number" min="0" step="0.01" placeholder="e.g. 5.00 (leave blank for free)" value={form.subscriptionPrice} onChange={(e) => update("subscriptionPrice", e.target.value)} id="profile-price" />
+                    <span className="form-hint">This sets the default subscription price. Manage tier pricing in the Tiers tab.</span>
                 </div>
                 <button className="btn btn--primary" onClick={() => void save()} disabled={loading} id="profile-save">
                     {loading ? "Saving..." : "Save Changes"}
                 </button>
                 {hydrating && <p className="t-xs t-dim">Loading connected wallet profile...</p>}
+            </div>
+
+            <div className="card card--panel stack stack-3" style={{ marginTop: "var(--s4)" }}>
+                <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                    <div className="stack stack-1">
+                        <h3 style={{ margin: 0 }}>Creator Verification</h3>
+                        <p className="t-xs t-dim">Request a verified badge for your InnerCircle profile.</p>
+                    </div>
+                    {verificationStatus ? (
+                        <span className={`badge ${verificationStatus === "APPROVED" ? "badge--secure" : "badge--locked"}`}>
+                            {verificationStatus.toLowerCase()}
+                        </span>
+                    ) : null}
+                </div>
+
+                <div className="form-group">
+                    <label className="form-label">Verification notes or links</label>
+                    <textarea
+                        className="form-textarea"
+                        placeholder="Add any links or context to support your verification."
+                        value={verificationNotes}
+                        onChange={(e) => setVerificationNotes(e.target.value)}
+                    />
+                </div>
+
+                {verificationError && <p className="t-sm t-error">{verificationError}</p>}
+
+                <button className="btn btn--secondary" onClick={submitVerification} disabled={verificationSubmitting}>
+                    {verificationSubmitting ? "Submitting..." : "Submit verification request"}
+                </button>
             </div>
         </div>
     );

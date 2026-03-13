@@ -16,6 +16,7 @@ const USER_ITEMS: SidebarItem[] = [
 ];
 
 const CREATOR_ITEMS: SidebarItem[] = [
+    { href: "/creator-studio/tiers", label: "Tiers", icon: "T" },
     { href: "/creator-studio/dashboard", label: "Dashboard", icon: "◈" },
     { href: "/creator-studio/go-live", label: "Go Live", icon: "▶" },
     { href: "/creator-studio/upload", label: "Upload", icon: "⊕" },

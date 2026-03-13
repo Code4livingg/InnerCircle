@@ -6,12 +6,18 @@ import { useWallet } from "@/lib/walletContext";
 import { Network } from "@provablehq/aleo-types";
 import {
   ApiError,
+  createTip,
   fetchCreatorByHandle,
   fetchSubscriptionStatus,
+  fetchSubscriptionTiers,
+  fetchTipLeaderboard,
+  type SubscriptionTier,
+  type TipLeaderboardEntry,
   type CreatorWithContent,
   verifyPurchase,
 } from "../../../lib/api";
 import { getWalletRole, type AppRole } from "../../../lib/walletRole";
+import { getWalletSessionToken } from "../../../lib/walletSession";
 import {
   executeCreditsTransfer,
   type FeePreference,
@@ -56,11 +62,12 @@ const formatCredits = (microcredits: string | null): string => {
   return `${(value / 1_000_000).toFixed(2)} credits / month`;
 };
 
-const formatTierCredits = (credits: number): string => {
-  if (!Number.isFinite(credits) || credits <= 0) {
+const formatTierCredits = (microcredits: string | null): string => {
+  const value = Number(microcredits ?? "0");
+  if (!Number.isFinite(value) || value <= 0) {
     return "Free access";
   }
-  return `${credits.toFixed(2)} credits / month`;
+  return `${(value / 1_000_000).toFixed(2)} credits / month`;
 };
 
 const formatWalletError = (message: string): string => {
@@ -71,6 +78,14 @@ const formatWalletError = (message: string): string => {
     return `${message}. Reconnect wallet and confirm the account has enough testnet balance for fees.`;
   }
   return message;
+};
+
+const toMicrocredits = (value: string): string => {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return "0";
+  }
+  return String(Math.round(parsed * 1_000_000));
 };
 
 function accentColor(handle: string): string {
@@ -103,8 +118,19 @@ export default function CreatorPage({ params }: CreatorPageProps) {
   const [subscribeTxId, setSubscribeTxId] = useState<string | null>(null);
   const [hasSubscription, setHasSubscription] = useState(false);
   const [subscriptionActiveUntil, setSubscriptionActiveUntil] = useState<string | null>(null);
+  const [subscriptionTierName, setSubscriptionTierName] = useState<string | null>(null);
+  const [activeTierId, setActiveTierId] = useState<string | null>(null);
   const [walletRole, setWalletRole] = useState<AppRole | null>(null);
   const [showMembership, setShowMembership] = useState(false);
+  const [tiers, setTiers] = useState<SubscriptionTier[]>([]);
+  const [selectedTierId, setSelectedTierId] = useState<string | null>(null);
+  const [tipAmount, setTipAmount] = useState("");
+  const [tipMessage, setTipMessage] = useState("");
+  const [tipAnonymous, setTipAnonymous] = useState(false);
+  const [tipError, setTipError] = useState<string | null>(null);
+  const [tipSuccess, setTipSuccess] = useState<string | null>(null);
+  const [tipLoading, setTipLoading] = useState(false);
+  const [leaderboard, setLeaderboard] = useState<TipLeaderboardEntry[]>([]);
 
   useEffect(() => {
     fetchCreatorByHandle(creatorId)
@@ -116,6 +142,56 @@ export default function CreatorPage({ params }: CreatorPageProps) {
         setError("Creator not found or server unavailable.");
       });
   }, [creatorId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const run = async (): Promise<void> => {
+      if (!creator) return;
+      try {
+        const data = await fetchSubscriptionTiers(creator.handle);
+        if (cancelled) return;
+        setTiers(data.tiers);
+        if (data.tiers.length > 0) {
+          setSelectedTierId((prev) => prev ?? data.tiers[0].id);
+        }
+      } catch {
+        if (!cancelled) {
+          setTiers([]);
+        }
+      }
+    };
+
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [creator]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const run = async (): Promise<void> => {
+      if (!creator) return;
+      try {
+        const data = await fetchTipLeaderboard(creator.handle);
+        if (!cancelled) {
+          setLeaderboard(data.supporters);
+        }
+      } catch {
+        if (!cancelled) {
+          setLeaderboard([]);
+        }
+      }
+    };
+
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [creator]);
 
   useEffect(() => {
     setWalletRole(getWalletRole(address));
@@ -155,11 +231,18 @@ export default function CreatorPage({ params }: CreatorPageProps) {
         if (!cancelled) {
           setHasSubscription(status.active);
           setSubscriptionActiveUntil(status.activeUntil);
+          setSubscriptionTierName(status.tierName);
+          setActiveTierId(status.tierId);
+          if (status.tierId) {
+            setSelectedTierId(status.tierId);
+          }
         }
       } catch {
         if (!cancelled) {
           setHasSubscription(false);
           setSubscriptionActiveUntil(null);
+          setSubscriptionTierName(null);
+          setActiveTierId(null);
         }
       }
     };
@@ -222,7 +305,8 @@ export default function CreatorPage({ params }: CreatorPageProps) {
         setSubscribeState("idle");
         return;
       }
-      const subscriptionPrice = BigInt(creator.subscriptionPriceMicrocredits ?? "0");
+      const selectedPrice = selectedTier?.priceMicrocredits ?? creator.subscriptionPriceMicrocredits ?? "0";
+      const subscriptionPrice = BigInt(selectedPrice);
       if (subscriptionPrice <= 0n) {
         setHasSubscription(true);
         setSubscribeState("success");
@@ -233,7 +317,7 @@ export default function CreatorPage({ params }: CreatorPageProps) {
         const walletTxId = await executeCreditsTransfer({
           wallet,
           recipientAddress: creator.walletAddress,
-          amountMicrocredits: creator.subscriptionPriceMicrocredits ?? "0",
+          amountMicrocredits: selectedPrice,
           feePreference,
         });
 
@@ -251,6 +335,7 @@ export default function CreatorPage({ params }: CreatorPageProps) {
             txId: chainTxId,
             creatorHandle: creator.handle,
             walletAddressHint: address ?? undefined,
+            tierId: selectedTier?.id,
           }),
         );
 
@@ -295,6 +380,46 @@ export default function CreatorPage({ params }: CreatorPageProps) {
     }
   };
 
+  const onTip = async (): Promise<void> => {
+    if (!creator) return;
+    setTipError(null);
+    setTipSuccess(null);
+
+    if (!connected || !address) {
+      setTipError("Connect your Aleo wallet before tipping.");
+      return;
+    }
+
+    const microcredits = toMicrocredits(tipAmount);
+    if (microcredits === "0") {
+      setTipError("Enter a tip amount greater than zero.");
+      return;
+    }
+
+    try {
+      setTipLoading(true);
+      const token = await getWalletSessionToken(wallet);
+      await createTip(
+        {
+          creatorHandle: creator.handle,
+          amountMicrocredits: microcredits,
+          message: tipMessage || undefined,
+          isAnonymous: tipAnonymous,
+        },
+        token,
+      );
+      setTipSuccess("Tip sent successfully.");
+      setTipAmount("");
+      setTipMessage("");
+      const data = await fetchTipLeaderboard(creator.handle);
+      setLeaderboard(data.supporters);
+    } catch (error) {
+      setTipError((error as Error).message || "Failed to send tip.");
+    } finally {
+      setTipLoading(false);
+    }
+  };
+
   if (error) {
     return (
       <main className="creator-page">
@@ -320,9 +445,12 @@ export default function CreatorPage({ params }: CreatorPageProps) {
 
   const color = accentColor(creator.handle);
   const initials = getInitials(creator);
-  const subscriptionLabel = formatCredits(creator.subscriptionPriceMicrocredits);
-  const baseCreditsRaw = Number(creator.subscriptionPriceMicrocredits ?? "0");
-  const baseCredits = Number.isFinite(baseCreditsRaw) ? baseCreditsRaw / 1_000_000 : 0;
+  const selectedTier = tiers.find((tier) => tier.id === selectedTierId) ?? null;
+  const activeTier = tiers.find((tier) => tier.id === activeTierId) ?? null;
+  const activeTierPrice = activeTier ? Number(activeTier.priceMicrocredits) : 0;
+  const displayedPriceMicrocredits =
+    selectedTier?.priceMicrocredits ?? creator.subscriptionPriceMicrocredits ?? "0";
+  const subscriptionLabel = formatCredits(displayedPriceMicrocredits);
   const activeUntilLabel = subscriptionActiveUntil
     ? new Date(subscriptionActiveUntil).toLocaleString()
     : null;
@@ -333,33 +461,10 @@ export default function CreatorPage({ params }: CreatorPageProps) {
       : walletRole === "user"
         ? "Fan wallet"
         : "Wallet connected";
-  const tiers = [
-    {
-      id: "supporter",
-      name: "Supporter",
-      multiplier: 1,
-      icon: "S",
-      tag: "On-chain",
-      perks: ["Early access posts", "Community chat", "Monthly highlights"],
-    },
-    {
-      id: "inner",
-      name: "Inner Circle",
-      multiplier: 1.4,
-      icon: "I",
-      tag: "Preview",
-      perks: ["Everything in Supporter", "Behind-the-scenes", "Monthly Q&A"],
-      highlight: true,
-    },
-    {
-      id: "vip",
-      name: "VIP",
-      multiplier: 1.8,
-      icon: "V",
-      tag: "Preview",
-      perks: ["Everything in Inner Circle", "Direct creator access", "Founders badge"],
-    },
-  ];
+  const tierNote =
+    tiers.length === 0
+      ? "This creator has not published tiers yet. Subscribers still unlock all private content."
+      : "Select a tier to subscribe. Higher tiers unlock all lower-tier content.";
 
   return (
     <main className="creator-page">
@@ -413,36 +518,58 @@ export default function CreatorPage({ params }: CreatorPageProps) {
               {hasSubscription ? <span className="badge badge--secure badge--dot">Active</span> : null}
             </div>
             <div className="tier-grid">
-              {tiers.map((tier) => {
-                const price = baseCredits > 0 ? baseCredits * tier.multiplier : 0;
-                const tagLabel = baseCredits > 0 ? tier.tag : "Free";
-                return (
-                  <div key={tier.id} className={`tier-card${tier.highlight ? " tier-card--primary" : ""}`}>
-                    <div className="tier-card__header">
-                      <span className={`tier-card__icon tier-card__icon--${tier.id}`}>{tier.icon}</span>
-                      <div className="tier-card__meta">
-                        <span className="tier-card__name">{tier.name}</span>
-                        <span className="tier-card__price">{formatTierCredits(price)}</span>
-                      </div>
+              {tiers.length === 0 ? (
+                <div className="tier-card tier-card--placeholder">
+                  <div className="tier-card__header">
+                    <span className="tier-card__icon tier-card__icon--inner">IC</span>
+                    <div className="tier-card__meta">
+                      <span className="tier-card__name">Standard</span>
+                      <span className="tier-card__price">{formatTierCredits(displayedPriceMicrocredits)}</span>
                     </div>
-                    <div className="tier-card__perks">
-                      {tier.perks.map((perk) => (
-                        <span key={`${tier.id}-${perk}`} className="tier-card__perk">
-                          {perk}
-                        </span>
-                      ))}
-                    </div>
-                    <span className={`tier-card__tag${tagLabel === "On-chain" ? " tier-card__tag--live" : ""}`}>
-                      {tagLabel}
-                    </span>
                   </div>
-                );
-              })}
+                  <div className="tier-card__perks">
+                    <span className="tier-card__perk">Private posts and uploads</span>
+                    <span className="tier-card__perk">Member-only discussions</span>
+                  </div>
+                  <span className="tier-card__tag tier-card__tag--live">On-chain</span>
+                </div>
+              ) : (
+                tiers.map((tier) => {
+                  const isSelected = tier.id === selectedTierId;
+                  const isActive = hasSubscription && activeTierId === tier.id;
+                  const tagLabel = isActive ? "Active" : Number(tier.priceMicrocredits) > 0 ? "On-chain" : "Free";
+                  return (
+                    <button
+                      type="button"
+                      key={tier.id}
+                      className={`tier-card${isSelected ? " tier-card--selected" : ""}${isActive ? " tier-card--active" : ""}`}
+                      onClick={() => setSelectedTierId(tier.id)}
+                    >
+                      <div className="tier-card__header">
+                        <span className="tier-card__icon tier-card__icon--inner">{tier.tierName.slice(0, 2).toUpperCase()}</span>
+                        <div className="tier-card__meta">
+                          <span className="tier-card__name">{tier.tierName}</span>
+                          <span className="tier-card__price">{formatTierCredits(tier.priceMicrocredits)}</span>
+                        </div>
+                      </div>
+                      {tier.description ? <p className="t-xs t-dim">{tier.description}</p> : null}
+                      <div className="tier-card__perks">
+                        {(tier.benefits.length > 0 ? tier.benefits : ["Private posts", "Community access"]).map((perk) => (
+                          <span key={`${tier.id}-${perk}`} className="tier-card__perk">
+                            {perk}
+                          </span>
+                        ))}
+                      </div>
+                      <span className={`tier-card__tag${tagLabel === "On-chain" || tagLabel === "Active" ? " tier-card__tag--live" : ""}`}>
+                        {tagLabel}
+                      </span>
+                    </button>
+                  );
+                })
+              )}
             </div>
             <p className="t-xs t-dim" style={{ marginTop: "var(--s2)" }}>
-              {baseCredits > 0
-                ? "All tiers unlock the same private feed today. Multi-tier payments are coming next."
-                : "Subscriptions are currently free. Paid tiers light up once the creator sets a price."}
+              {tierNote}
             </p>
           </div>
           <div>
@@ -456,8 +583,15 @@ export default function CreatorPage({ params }: CreatorPageProps) {
             ) : (
               <div className="grid-2" style={{ gap: "var(--s3)" }}>
                 {creator.contents.map((item) => {
-                  const card = <LockedContentCard title={item.title} locked={!canAccessContent} />;
-                  if (!canAccessContent) {
+                  const requiredTier = item.subscriptionTierId
+                    ? tiers.find((tier) => tier.id === item.subscriptionTierId)
+                    : null;
+                  const requiredTierPrice = requiredTier ? Number(requiredTier.priceMicrocredits) : 0;
+                  const hasTierAccess =
+                    requiredTierPrice === 0 || (activeTierPrice > 0 && activeTierPrice >= requiredTierPrice);
+                  const isUnlocked = canAccessContent && hasTierAccess;
+                  const card = <LockedContentCard title={item.title} locked={!isUnlocked} />;
+                  if (!isUnlocked) {
                     return <div key={item.id}>{card}</div>;
                   }
                   return (
@@ -498,6 +632,12 @@ export default function CreatorPage({ params }: CreatorPageProps) {
                   <span className="t-lg" style={{ fontFamily: "var(--font-sans)", fontWeight: 600, letterSpacing: "-0.02em", color }}>
                     {subscriptionLabel}
                   </span>
+                  {selectedTier ? (
+                    <span className="t-xs t-dim">Selected tier: {selectedTier.tierName}</span>
+                  ) : null}
+                  {hasSubscription && subscriptionTierName ? (
+                    <span className="t-xs t-dim">Active tier: {subscriptionTierName}</span>
+                  ) : null}
                   <span className="t-xs t-dim">Paid via {CREDITS_PROGRAM_ID}/transfer_public</span>
                 </div>
                 <p className="t-sm t-muted" style={{ marginBottom: "var(--s3)" }}>
@@ -564,6 +704,69 @@ export default function CreatorPage({ params }: CreatorPageProps) {
                 ) : null}
               </>
             )}
+          </div>
+
+          <div className="card card--panel">
+            <p className="dashboard__panel-title" style={{ marginBottom: "var(--s2)" }}>Tip the creator</p>
+            <div className="stack stack-2">
+              <div className="form-group">
+                <label className="form-label">Amount (credits)</label>
+                <input
+                  className="form-input"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="e.g. 2.50"
+                  value={tipAmount}
+                  onChange={(e) => setTipAmount(e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Message (optional)</label>
+                <textarea
+                  className="form-textarea"
+                  placeholder="Share a note with the creator"
+                  value={tipMessage}
+                  onChange={(e) => setTipMessage(e.target.value)}
+                />
+              </div>
+              <label className="row row-2" style={{ alignItems: "center" }}>
+                <input
+                  type="checkbox"
+                  checked={tipAnonymous}
+                  onChange={(e) => setTipAnonymous(e.target.checked)}
+                />
+                <span className="t-xs t-dim">Tip anonymously</span>
+              </label>
+              <button
+                type="button"
+                className="btn btn--primary"
+                onClick={onTip}
+                disabled={tipLoading}
+              >
+                {tipLoading ? "Sending tip..." : "Send tip"}
+              </button>
+              {tipError ? <p className="t-sm t-error">{tipError}</p> : null}
+              {tipSuccess ? <p className="t-sm t-success">{tipSuccess}</p> : null}
+            </div>
+
+            <div className="stack stack-1" style={{ marginTop: "var(--s3)" }}>
+              <span className="t-xs t-dim">Top supporters</span>
+              {leaderboard.length === 0 ? (
+                <p className="t-xs t-dim">No tips yet.</p>
+              ) : (
+                <div className="stack stack-1">
+                  {leaderboard.slice(0, 5).map((supporter) => (
+                    <div key={supporter.supporter} className="row" style={{ justifyContent: "space-between" }}>
+                      <span className="t-xs">{supporter.supporter}</span>
+                      <span className="t-xs t-dim">
+                        {(Number(supporter.totalMicrocredits) / 1_000_000).toFixed(2)} credits
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>

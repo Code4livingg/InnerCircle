@@ -33,6 +33,8 @@ InnerCircle is a privacy-first creator platform built on Aleo. It uses zero-know
 3. Storage/streaming: encrypted media in a private object store with expiring signed URLs.
 4. Frontend: Next.js app with Aleo wallet adapters and proof flow UI.
 
+See [docs/ARCHITECTURE.md](C:/Users/ankur/OneDrive/Desktop/OnlyAleo/docs/ARCHITECTURE.md) for detailed flows and diagrams.
+
 ## Project Structure
 
 ```text

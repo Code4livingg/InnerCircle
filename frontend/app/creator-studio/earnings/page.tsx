@@ -5,6 +5,17 @@ import { useEffect, useMemo, useState } from "react";
 import { useWallet } from "@/lib/walletContext";
 import { ApiError, fetchCreatorAnalytics, type CreatorAnalyticsResponse } from "../../../lib/api";
 import { StatCard } from "../../../components/StatCard";
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 const formatCredits = (microcredits: string): string =>
   `${(Number(microcredits) / 1_000_000).toFixed(2)} credits`;
@@ -53,6 +64,7 @@ export default function EarningsPage() {
 
     const subscriptionRevenue = Number(analytics.stats.subscriptionRevenueMicrocredits);
     const ppvRevenue = Number(analytics.stats.ppvRevenueMicrocredits);
+    const tipRevenue = Number(analytics.stats.tipRevenueMicrocredits);
     const totalRevenue = Number(analytics.stats.totalRevenueMicrocredits);
 
     return {
@@ -60,11 +72,25 @@ export default function EarningsPage() {
       monthlyRevenueLabel: formatCredits(analytics.stats.monthlyRevenueMicrocredits),
       subscriptionRevenueLabel: formatCredits(analytics.stats.subscriptionRevenueMicrocredits),
       ppvRevenueLabel: formatCredits(analytics.stats.ppvRevenueMicrocredits),
+      tipRevenueLabel: formatCredits(analytics.stats.tipRevenueMicrocredits),
       mixLabel:
         totalRevenue > 0
-          ? `${Math.round((subscriptionRevenue / totalRevenue) * 100)}% subscription / ${Math.round((ppvRevenue / totalRevenue) * 100)}% PPV`
+          ? `${Math.round((subscriptionRevenue / totalRevenue) * 100)}% subscription / ${Math.round((ppvRevenue / totalRevenue) * 100)}% PPV / ${Math.round((tipRevenue / totalRevenue) * 100)}% tips`
           : "No paid unlocks recorded yet",
     };
+  }, [analytics]);
+
+  const chartData = useMemo(() => {
+    if (!analytics) return [];
+    return analytics.series.map((point) => ({
+      date: point.date.slice(5),
+      revenue:
+        (Number(point.subscriptionRevenueMicrocredits) +
+          Number(point.ppvRevenueMicrocredits) +
+          Number(point.tipRevenueMicrocredits)) /
+        1_000_000,
+      views: point.contentViews,
+    }));
   }, [analytics]);
 
   return (
@@ -124,6 +150,16 @@ export default function EarningsPage() {
               value={summary.ppvRevenueLabel}
               sub={`${analytics.stats.ppvPostCount} PPV posts available`}
             />
+            <StatCard
+              label="Tip Revenue"
+              value={summary.tipRevenueLabel}
+              sub="private tips from fans"
+            />
+            <StatCard
+              label="Content Views"
+              value={analytics.stats.contentViewCount.toLocaleString()}
+              sub={`${analytics.stats.monthlyContentViewCount.toLocaleString()} views this month`}
+            />
           </div>
 
           <div className="grid-2" style={{ gap: "var(--s3)" }}>
@@ -152,6 +188,12 @@ export default function EarningsPage() {
                   <span className="t-sm t-muted">Total subscribers acquired</span>
                   <span className="t-sm" style={{ color: "var(--c-text-1)" }}>
                     {analytics.stats.totalSubscriberCount}
+                  </span>
+                </div>
+                <div className="row" style={{ justifyContent: "space-between", gap: "var(--s3)", flexWrap: "wrap" }}>
+                  <span className="t-sm t-muted">Churn rate (30d)</span>
+                  <span className="t-sm" style={{ color: "var(--c-text-1)" }}>
+                    {(analytics.stats.churnRate * 100).toFixed(1)}%
                   </span>
                 </div>
               </div>
@@ -192,6 +234,54 @@ export default function EarningsPage() {
                     0.00 credits
                   </span>
                 </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid-2" style={{ gap: "var(--s3)" }}>
+            <div className="card card--panel">
+              <p className="dashboard__panel-title" style={{ marginBottom: "var(--s3)" }}>
+                Revenue (last 30 days)
+              </p>
+              <div style={{ width: "100%", height: 220 }}>
+                <ResponsiveContainer>
+                  <AreaChart data={chartData}>
+                    <defs>
+                      <linearGradient id="revenueFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="var(--c-violet)" stopOpacity={0.6} />
+                        <stop offset="95%" stopColor="var(--c-violet)" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid stroke="rgba(255,255,255,0.08)" vertical={false} />
+                    <XAxis dataKey="date" stroke="var(--c-text-3)" tickLine={false} axisLine={false} />
+                    <YAxis stroke="var(--c-text-3)" tickLine={false} axisLine={false} />
+                    <Tooltip
+                      contentStyle={{ background: "var(--c-surface)", border: "1px solid var(--c-border)", borderRadius: 12 }}
+                      labelStyle={{ color: "var(--c-text-2)" }}
+                    />
+                    <Area type="monotone" dataKey="revenue" stroke="var(--c-violet)" fill="url(#revenueFill)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            <div className="card card--panel">
+              <p className="dashboard__panel-title" style={{ marginBottom: "var(--s3)" }}>
+                Content views (last 30 days)
+              </p>
+              <div style={{ width: "100%", height: 220 }}>
+                <ResponsiveContainer>
+                  <LineChart data={chartData}>
+                    <CartesianGrid stroke="rgba(255,255,255,0.08)" vertical={false} />
+                    <XAxis dataKey="date" stroke="var(--c-text-3)" tickLine={false} axisLine={false} />
+                    <YAxis stroke="var(--c-text-3)" tickLine={false} axisLine={false} />
+                    <Tooltip
+                      contentStyle={{ background: "var(--c-surface)", border: "1px solid var(--c-border)", borderRadius: 12 }}
+                      labelStyle={{ color: "var(--c-text-2)" }}
+                    />
+                    <Line type="monotone" dataKey="views" stroke="var(--c-success)" strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
               </div>
             </div>
           </div>

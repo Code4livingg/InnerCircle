@@ -90,6 +90,8 @@ export default function ContentPage({ params }: ContentPageProps) {
   const [traceSession, setTraceSession] = useState<StartSessionResponse | null>(null);
   const [hasActiveSubscription, setHasActiveSubscription] = useState(false);
   const [subscriptionTxId, setSubscriptionTxId] = useState<string | null>(null);
+  const [subscriptionTierId, setSubscriptionTierId] = useState<string | null>(null);
+  const [subscriptionTierPrice, setSubscriptionTierPrice] = useState<string | null>(null);
 
   useEffect(() => {
     fetchContentById(contentId)
@@ -104,6 +106,11 @@ export default function ContentPage({ params }: ContentPageProps) {
 
   const ppvPriceMicrocredits = Number(content?.ppvPriceMicrocredits ?? "0");
   const isPpvContent = ppvPriceMicrocredits > 0;
+  const requiredTier = content?.subscriptionTier ?? null;
+  const requiredTierPrice = Number(requiredTier?.priceMicrocredits ?? "0");
+  const currentTierPrice = Number(subscriptionTierPrice ?? "0");
+  const requiresTierUpgrade =
+    !!requiredTier && !isPpvContent && requiredTierPrice > 0 && currentTierPrice > 0 && currentTierPrice < requiredTierPrice;
 
   useEffect(() => {
     let cancelled = false;
@@ -120,13 +127,20 @@ export default function ContentPage({ params }: ContentPageProps) {
       try {
         const status = await fetchSubscriptionStatus(content.creator.handle, address);
         if (!cancelled) {
-          setHasActiveSubscription(status.active);
+          const requiredTierPrice = Number(content.subscriptionTier?.priceMicrocredits ?? "0");
+          const subscriberTierPrice = Number(status.tierPriceMicrocredits ?? status.priceMicrocredits ?? "0");
+          const meetsTier = requiredTierPrice <= 0 || subscriberTierPrice >= requiredTierPrice;
+          setHasActiveSubscription(status.active && meetsTier);
           setSubscriptionTxId(status.active ? status.txId : null);
+          setSubscriptionTierId(status.tierId ?? null);
+          setSubscriptionTierPrice(status.tierPriceMicrocredits ?? status.priceMicrocredits ?? null);
         }
       } catch {
         if (!cancelled) {
           setHasActiveSubscription(false);
           setSubscriptionTxId(null);
+          setSubscriptionTierId(null);
+          setSubscriptionTierPrice(null);
         }
       }
     };
@@ -304,21 +318,22 @@ export default function ContentPage({ params }: ContentPageProps) {
         return;
       }
 
-      const creatorHandle = content.creator.handle;
-      if (!hasActiveSubscription || !subscriptionTxId || !isOnChainAleoTxId(subscriptionTxId)) {
-        throw new Error("No active subscription payment found for this creator. Subscribe first.");
-      }
+    const creatorHandle = content.creator.handle;
+    if (!hasActiveSubscription || !subscriptionTxId || !isOnChainAleoTxId(subscriptionTxId)) {
+      throw new Error("No active subscription payment found for this creator. Subscribe first.");
+    }
 
       setProofTxId(subscriptionTxId);
 
       const session = await runWithPendingRetry(() =>
-        createSession({
-          mode: "subscription-direct",
-          creatorHandle,
-          purchaseTxId: subscriptionTxId,
-          walletAddressHint: address ?? undefined,
-        }),
-      );
+      createSession({
+        mode: "subscription-direct",
+        creatorHandle,
+        purchaseTxId: subscriptionTxId,
+        walletAddressHint: address ?? undefined,
+        tierId: subscriptionTierId ?? undefined,
+      }),
+    );
       await activateTraceSession(session.sessionToken);
       setSessionToken(session.sessionToken);
       setProofState("success");
@@ -367,7 +382,9 @@ export default function ContentPage({ params }: ContentPageProps) {
             @{content.creator.handle}
             {isPpvContent
               ? ` · ${ppvPriceMicrocredits.toLocaleString()} microcredits PPV`
-              : " · Subscription content"}
+              : requiredTier
+                ? ` · ${requiredTier.tierName} tier required`
+                : " · Subscription content"}
           </p>
         </div>
         <SessionBadge />
@@ -478,7 +495,13 @@ export default function ContentPage({ params }: ContentPageProps) {
 
           {proofError ? <p className="t-sm t-error">{proofError}</p> : null}
           {!isPpvContent && !hasActiveSubscription ? (
-            <p className="t-sm t-muted">No active subscription payment found for this creator yet.</p>
+            requiresTierUpgrade ? (
+              <p className="t-sm t-error">
+                Your current tier does not unlock this content. Upgrade to the {requiredTier?.tierName ?? "next"} tier.
+              </p>
+            ) : (
+              <p className="t-sm t-muted">No active subscription payment found for this creator yet.</p>
+            )
           ) : null}
         </div>
       )}

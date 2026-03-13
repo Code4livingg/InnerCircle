@@ -1,8 +1,8 @@
 import type { Response } from "express";
 import { prisma } from "../db/prisma.js";
-import { env } from "../config/env.js";
 import type { SessionRequest } from "../middleware/requireSession.js";
-import { generateMediaUrl } from "../services/mediaStorageService.js";
+import { generateMediaUrl, signedUrlTtlSeconds } from "../services/mediaStorageService.js";
+import { getSubscriptionActiveUntil } from "../services/subscriptionService.js";
 import { createWatermarkId } from "../services/watermarkService.js";
 
 const canAccessContentWithSession = (
@@ -33,9 +33,16 @@ export const getMediaAccessUrl = async (req: SessionRequest, res: Response): Pro
         id: true,
         baseObjectKey: true,
         mimeType: true,
+        subscriptionTier: {
+          select: {
+            id: true,
+            priceMicrocredits: true,
+          },
+        },
         creator: {
           select: {
             handle: true,
+            id: true,
           },
         },
       },
@@ -51,8 +58,39 @@ export const getMediaAccessUrl = async (req: SessionRequest, res: Response): Pro
       return;
     }
 
+    if (session.scope.type === "subscription") {
+      const latestPurchase = await prisma.subscriptionPurchase.findFirst({
+        where: {
+          creatorId: content.creator.id,
+          walletHash: session.wh,
+        },
+        orderBy: { verifiedAt: "desc" },
+        select: {
+          verifiedAt: true,
+          priceMicrocredits: true,
+        },
+      });
+
+      if (!latestPurchase) {
+        res.status(403).json({ error: "No active subscription for this creator." });
+        return;
+      }
+
+      const activeUntil = getSubscriptionActiveUntil(latestPurchase.verifiedAt);
+      if (activeUntil.getTime() <= Date.now()) {
+        res.status(403).json({ error: "Subscription expired. Please renew to continue." });
+        return;
+      }
+
+      if (content.subscriptionTier?.priceMicrocredits && latestPurchase.priceMicrocredits < content.subscriptionTier.priceMicrocredits) {
+        res.status(403).json({ error: "Subscription tier upgrade required to access this content." });
+        return;
+      }
+    }
+
     const url = await generateMediaUrl(content.baseObjectKey);
-    const expiresAt = new Date(Date.now() + env.signedUrlExpirationSeconds * 1000).toISOString();
+    const ttlSeconds = signedUrlTtlSeconds();
+    const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
     const watermarkId = createWatermarkId(session.wh, content.id, "signed-url");
 
     await prisma.streamEvent.create({
@@ -65,10 +103,11 @@ export const getMediaAccessUrl = async (req: SessionRequest, res: Response): Pro
       },
     });
 
+    res.setHeader("Cache-Control", "no-store");
     res.json({
       url,
       expiresAt,
-      expiresIn: env.signedUrlExpirationSeconds,
+      expiresIn: ttlSeconds,
       mimeType: content.mimeType,
     });
   } catch (error) {
