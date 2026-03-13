@@ -2,9 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { toApiUrl } from "@/lib/apiBase";
 import { useWallet } from "@/lib/walletContext";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080";
 
 type FeedCreator = {
   id: string;
@@ -42,7 +41,7 @@ export default function UserDashboardPage() {
 
   useEffect(() => {
     const run = async () => {
-      const res = await fetch(`${API_BASE}/api/discover/feed`);
+      const res = await fetch(toApiUrl("/api/discover/feed"));
       const payload = (await res.json()) as { creators: FeedCreator[]; contents: FeedContent[] };
       setFeedCreators(payload.creators);
       setFeedContents(payload.contents);
@@ -89,7 +88,7 @@ export default function UserDashboardPage() {
               ? `Connected wallet: ${walletAddress}`
               : "Connect a wallet to verify creator subscriptions and PPV purchases."}
           </p>
-          <p>OnlyAleo now uses direct credits.aleo/transfer_public payments instead of custom payment programs.</p>
+          <p>InnerCircle now uses direct credits.aleo/transfer_public payments instead of custom payment programs.</p>
         </article>
       </section>
 

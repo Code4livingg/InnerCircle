@@ -1,0 +1,10 @@
+ValidationError: The Express 'trust proxy' setting is true, which allows anyone to trivially bypass IP-based rate limiting. See https://express-rate-limit.github.io/ERR_ERL_PERMISSIVE_TRUST_PROXY/ for more information.
+    at Object.trustProxy (file:///C:/Users/ankur/OneDrive/Desktop/OnlyAleo/backend/node_modules/express-rate-limit/dist/index.mjs:139:13)
+    at wrappedValidations.<computed> [as trustProxy] (file:///C:/Users/ankur/OneDrive/Desktop/OnlyAleo/backend/node_modules/express-rate-limit/dist/index.mjs:369:22)
+    at Object.keyGenerator (file:///C:/Users/ankur/OneDrive/Desktop/OnlyAleo/backend/node_modules/express-rate-limit/dist/index.mjs:629:20)
+    at file:///C:/Users/ankur/OneDrive/Desktop/OnlyAleo/backend/node_modules/express-rate-limit/dist/index.mjs:682:32
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async file:///C:/Users/ankur/OneDrive/Desktop/OnlyAleo/backend/node_modules/express-rate-limit/dist/index.mjs:663:5 {
+  code: 'ERR_ERL_PERMISSIVE_TRUST_PROXY',
+  help: 'https://express-rate-limit.github.io/ERR_ERL_PERMISSIVE_TRUST_PROXY/'
+}

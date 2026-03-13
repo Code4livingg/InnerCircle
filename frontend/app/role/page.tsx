@@ -66,7 +66,7 @@ export default function RolePage() {
         <div className="stack stack-4" style={{ textAlign: "center", maxWidth: 640, margin: "0 auto" }}>
           <div className="stack stack-2">
             <p className="section__label">Welcome</p>
-            <h2>How will you use OnlyAleo?</h2>
+            <h2>How will you use InnerCircle?</h2>
             <p className="t-muted">Choose your wallet role. Each wallet is permanently locked to one role.</p>
           </div>
 

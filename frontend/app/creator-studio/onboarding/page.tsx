@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { toApiUrl } from "@/lib/apiBase";
 import { useWallet } from "@/lib/walletContext";
 import { ApiError, fetchCreatorByWallet } from "../../../lib/api";
 import {
@@ -10,7 +11,6 @@ import {
     WalletRoleConflictError,
 } from "../../../lib/walletRole";
 
-const API = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080";
 const STEPS = ["Profile", "Pricing", "Done"];
 
 const readApiError = async (res: Response): Promise<string> => {
@@ -58,7 +58,7 @@ export default function OnboardingPage() {
             try {
                 const data = await fetchCreatorByWallet(address);
                 await claimWalletRoleWithBackend(address, "creator");
-                localStorage.setItem("onlyaleo_creator_handle", data.creator.handle);
+                localStorage.setItem("innercircle_creator_handle", data.creator.handle);
                 router.replace("/creator-studio/dashboard");
             } catch {
                 // No creator profile yet for this wallet.
@@ -80,7 +80,7 @@ export default function OnboardingPage() {
         try {
             await claimWalletRoleWithBackend(form.walletAddress, "creator");
 
-            const res = await fetch(`${API}/api/creators/register`, {
+            const res = await fetch(toApiUrl("/api/creators/register"), {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -122,7 +122,7 @@ export default function OnboardingPage() {
 
         try {
             const microcredits = Math.round(parseFloat(form.subscriptionPrice) * 1_000_000);
-            const res = await fetch(`${API}/api/creators/pricing`, {
+            const res = await fetch(toApiUrl("/api/creators/pricing"), {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({

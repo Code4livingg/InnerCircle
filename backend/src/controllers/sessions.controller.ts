@@ -9,6 +9,8 @@ import {
   verifySubscriptionProof,
   verifyPpvPayment,
   verifySubscriptionPayment,
+  verifyAccessPassPayment,
+  verifyAccessPassProof,
 } from "../services/proofVerificationService.js";
 import { ensureWalletRoleByHash, toClientRole, WalletRoleConflictError } from "../services/walletRoleService.js";
 import { DB_UNAVAILABLE_CODE, DB_UNAVAILABLE_MESSAGE, isDatabaseUnavailableError } from "../utils/dbErrors.js";
@@ -39,6 +41,13 @@ const sessionSchema = z.discriminatedUnion("mode", [
     proof: proofSchema.optional(),
     walletAddressHint: z.string().min(10).optional(),
   }),
+  z.object({
+    mode: z.literal("access-pass"),
+    contentId: z.string().min(1),
+    proofTxId: z.string().min(10).optional(),
+    proof: proofSchema.optional(),
+    walletAddressHint: z.string().min(10).optional(),
+  }),
   // Direct purchase-tx modes — no separate prove_ call needed
   z.object({
     mode: z.literal("subscription-direct"),
@@ -48,6 +57,12 @@ const sessionSchema = z.discriminatedUnion("mode", [
   }),
   z.object({
     mode: z.literal("ppv-direct"),
+    contentId: z.string().min(1),
+    purchaseTxId: z.string().min(10),
+    walletAddressHint: z.string().min(10).optional(),
+  }),
+  z.object({
+    mode: z.literal("access-pass-direct"),
     contentId: z.string().min(1),
     purchaseTxId: z.string().min(10),
     walletAddressHint: z.string().min(10).optional(),
@@ -214,6 +229,49 @@ export const createAccessSession = async (req: Request, res: Response): Promise<
       return;
     }
 
+    if (payload.mode === "access-pass-direct") {
+      if (!isOnChainAleoTxId(payload.purchaseTxId)) {
+        res.status(409).json({ error: "Purchase tx not finalized yet.", code: "TX_PENDING" });
+        return;
+      }
+
+      const content = await prisma.content.findUnique({
+        where: { id: payload.contentId },
+        select: {
+          id: true,
+          contentFieldId: true,
+          ppvPriceMicrocredits: true,
+          creator: {
+            select: {
+              creatorFieldId: true,
+              walletAddress: true,
+              walletHash: true,
+            },
+          },
+        },
+      });
+      if (!content) { res.status(404).json({ error: "Content not found" }); return; }
+
+      const verified = await verifyAccessPassPayment({
+        creatorFieldId: content.creator.creatorFieldId,
+        contentFieldId: content.contentFieldId,
+        purchaseTxId: payload.purchaseTxId,
+        walletAddressHint: payload.walletAddressHint,
+        expectedPriceMicrocredits: content.ppvPriceMicrocredits ?? undefined,
+        expectedRecipientAddress: content.creator.walletAddress,
+      });
+
+      if (verified.walletHash === content.creator.walletHash) {
+        res.status(409).json({ error: "Creator wallets cannot open fan access sessions.", code: "ROLE_CONFLICT", existingRole: "creator", requestedRole: "user" });
+        return;
+      }
+
+      await ensureWalletRoleByHash(verified.walletHash, "FAN");
+      const session = createSessionToken({ walletHash: verified.walletHash, scope: { type: "ppv", contentId: content.id } });
+      res.json({ sessionToken: session.token, sessionId: session.sessionId, expiresAt: session.expiresAt });
+      return;
+    }
+
     // ── Legacy proof-based modes ──────────────────────────────────────────────
     const proofTxId = extractProofTxId(payload as { proofTxId?: string; proof?: z.infer<typeof proofSchema> });
     const proofFunctionName = extractProofFunctionName(payload as { proof?: z.infer<typeof proofSchema> });
@@ -263,6 +321,54 @@ export const createAccessSession = async (req: Request, res: Response): Promise<
       const session = createSessionToken({
         walletHash: verified.walletHash,
         scope: { type: "subscription", creatorId: creator.handle },
+      });
+
+      res.json({ sessionToken: session.token, sessionId: session.sessionId, expiresAt: session.expiresAt });
+      return;
+    }
+
+    if (payload.mode === "access-pass") {
+      const content = await prisma.content.findUnique({
+        where: { id: payload.contentId },
+        select: {
+          id: true,
+          contentFieldId: true,
+          creator: {
+            select: {
+              creatorFieldId: true,
+              walletHash: true,
+            },
+          },
+        },
+      });
+
+      if (!content) {
+        res.status(404).json({ error: "Content not found" });
+        return;
+      }
+
+      const verified = await verifyAccessPassProof({
+        creatorFieldId: content.creator.creatorFieldId,
+        contentFieldId: content.contentFieldId,
+        proveTxId: proofTxId,
+        walletAddressHint: payload.walletAddressHint,
+      });
+
+      if (verified.walletHash === content.creator.walletHash) {
+        res.status(409).json({
+          error: "Creator wallets cannot open fan access sessions.",
+          code: "ROLE_CONFLICT",
+          existingRole: "creator",
+          requestedRole: "user",
+        });
+        return;
+      }
+
+      await ensureWalletRoleByHash(verified.walletHash, "FAN");
+
+      const session = createSessionToken({
+        walletHash: verified.walletHash,
+        scope: { type: "ppv", contentId: content.id },
       });
 
       res.json({ sessionToken: session.token, sessionId: session.sessionId, expiresAt: session.expiresAt });

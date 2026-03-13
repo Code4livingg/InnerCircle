@@ -2,11 +2,13 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { ApiError, fetchCreators, type Creator } from "../../lib/api";
+import { ApiError, fetchCreators, fetchLiveStreams, type Creator, type LiveStream } from "../../lib/api";
+import { useWallet } from "@/lib/walletContext";
+import { getWalletSessionToken } from "@/lib/walletSession";
 
 const CATEGORIES = ["All", "Art", "Music", "Writing", "Technology", "Film", "Education"];
 
-function getInitials(creator: Creator): string {
+function getInitials(creator: Pick<Creator, "displayName" | "handle">): string {
     const name = creator.displayName ?? creator.handle;
     return name.split(/\s+/).map((w) => w[0]?.toUpperCase() ?? "").slice(0, 2).join("");
 }
@@ -27,9 +29,13 @@ function SkeletonGrid() {
 }
 
 export default function DiscoverPage() {
+    const wallet = useWallet();
     const [creators, setCreators] = useState<Creator[]>([]);
+    const [liveStreams, setLiveStreams] = useState<LiveStream[]>([]);
     const [loading, setLoading] = useState(true);
+    const [liveLoading, setLiveLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [liveError, setLiveError] = useState<string | null>(null);
     const [search, setSearch] = useState("");
     const [activeCategory, setActiveCategory] = useState("All");
 
@@ -45,6 +51,33 @@ export default function DiscoverPage() {
             })
             .finally(() => setLoading(false));
     }, []);
+
+    useEffect(() => {
+        const hydrateLiveStreams = async () => {
+            if (!wallet.connected || !wallet.address) {
+                setLiveStreams([]);
+                setLiveError(null);
+                setLiveLoading(false);
+                return;
+            }
+
+            setLiveLoading(true);
+            setLiveError(null);
+
+            try {
+                const walletToken = await getWalletSessionToken(wallet);
+                const data = await fetchLiveStreams(walletToken);
+                setLiveStreams(data.liveStreams);
+            } catch (err) {
+                setLiveStreams([]);
+                setLiveError((err as Error).message || "Could not load live streams.");
+            } finally {
+                setLiveLoading(false);
+            }
+        };
+
+        void hydrateLiveStreams();
+    }, [wallet]);
 
     const filtered = creators.filter((c) => {
         const q = search.toLowerCase();
@@ -106,6 +139,73 @@ export default function DiscoverPage() {
                             </button>
                         ))}
                     </div>
+                </section>
+
+                <section className="stack stack-3 ic-fade-up ic-delay-100" style={{ marginBottom: "var(--s4)" }}>
+                    <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: "var(--s2)", flexWrap: "wrap" }}>
+                        <div className="stack stack-1">
+                            <p className="section__label" style={{ marginBottom: 0 }}>Live Now</p>
+                            <p className="t-sm t-muted">
+                                Private live streams gated by Aleo wallet access and IVS playback tokens.
+                            </p>
+                        </div>
+                    </div>
+
+                    {!wallet.connected ? (
+                        <div className="card card--panel">
+                            <p className="t-sm t-muted">Connect your wallet to view live private streams.</p>
+                        </div>
+                    ) : null}
+
+                    {wallet.connected && liveLoading ? (
+                        <div className="disc-grid">
+                            {Array.from({ length: 2 }).map((_, index) => (
+                                <div key={index} className="disc-card disc-card--skeleton" />
+                            ))}
+                        </div>
+                    ) : null}
+
+                    {wallet.connected && liveError ? (
+                        <div className="disc-error">
+                            <p>{liveError}</p>
+                        </div>
+                    ) : null}
+
+                    {wallet.connected && !liveLoading && !liveError && liveStreams.length === 0 ? (
+                        <div className="card card--panel">
+                            <p className="t-sm t-muted">No creators are live right now.</p>
+                        </div>
+                    ) : null}
+
+                    {wallet.connected && liveStreams.length > 0 ? (
+                        <div className="disc-grid">
+                            {liveStreams.map((stream) => (
+                                <Link key={stream.id} href={`/live/${stream.id}`} className="disc-card-link">
+                                    <div className="disc-card">
+                                        <span className="disc-card__tag" style={{ color: "var(--c-violet)" }}>LIVE</span>
+                                        <div className="disc-card__avatar">
+                                            {getInitials({
+                                                displayName: stream.creator.displayName,
+                                                handle: stream.creator.handle,
+                                            })}
+                                        </div>
+                                        <h3 className="disc-card__name">{stream.title}</h3>
+                                        <p className="disc-card__handle">@{stream.creator.handle}</p>
+                                        <p className="disc-card__bio">
+                                            {stream.accessType === "PPV"
+                                                ? `${(Number(stream.ppvPriceMicrocredits ?? "0") / 1_000_000).toFixed(2)} credits pay-per-view`
+                                                : "Subscription-gated live stream"}
+                                        </p>
+                                        <div className="disc-card__divider" />
+                                        <div className="disc-card__footer">
+                                            <span className="disc-card__price">{stream.accessType}</span>
+                                            <span className="disc-card__view">Watch</span>
+                                        </div>
+                                    </div>
+                                </Link>
+                            ))}
+                        </div>
+                    ) : null}
                 </section>
 
                 {/* States */}

@@ -270,7 +270,7 @@ export default function CreatorPage({ params }: CreatorPageProps) {
         }
 
         if (process.env.NODE_ENV !== "production") {
-          console.warn("[OnlyAleo][Shield] retrying subscription with alternate fee order", {
+          console.warn("[InnerCircle][Shield] retrying subscription with alternate fee order", {
             reason: message,
           });
         }

@@ -34,6 +34,7 @@ model Creator {
   createdAt                     DateTime  @default(now())
 
   contents  Content[]
+  liveStreams LiveStream[]
   subscriptionPurchases SubscriptionPurchase[]
   followers CreatorFollow[]
 
@@ -178,5 +179,49 @@ model PpvPurchase {
   createdAt          DateTime @default(now())
 
   @@index([contentId])
+  @@index([walletHash])
+}
+
+model LiveStream {
+  id                             String            @id @default(uuid()) @db.Uuid
+  creatorId                      String            @db.Uuid
+  creator                        Creator           @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  ivsChannelArn                  String            @unique
+  ivsChannelName                 String
+  streamKeyArn                   String
+  streamKeyValue                 String
+  ingestEndpoint                 String
+  playbackUrl                    String
+  playbackKeyPairArn             String?
+  playbackPublicKey              String?
+  playbackPrivateKeyCiphertextB64 String?
+  playbackPrivateKeyIvB64        String?
+  playbackPrivateKeyAuthTagB64   String?
+  purchaseFieldId                String?           @unique
+  title                          String
+  accessType                     ContentAccessType @default(SUBSCRIPTION)
+  ppvPriceMicrocredits           BigInt?
+  status                         String            @default("offline")
+  startedAt                      DateTime?
+  endedAt                        DateTime?
+  createdAt                      DateTime          @default(now())
+  purchases                      LiveStreamPurchase[]
+
+  @@index([creatorId])
+  @@index([status])
+}
+
+model LiveStreamPurchase {
+  id                String     @id @default(uuid()) @db.Uuid
+  txId              String     @unique
+  walletHash        String
+  liveStreamId      String     @db.Uuid
+  liveStream        LiveStream @relation(fields: [liveStreamId], references: [id], onDelete: Cascade)
+  purchaseFieldId   String
+  priceMicrocredits BigInt
+  verifiedAt        DateTime   @default(now())
+  createdAt         DateTime   @default(now())
+
+  @@index([liveStreamId])
   @@index([walletHash])
 }

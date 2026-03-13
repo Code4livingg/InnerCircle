@@ -134,7 +134,7 @@ export default function EarningsPage() {
               </div>
               <div className="stack stack-2">
                 <p className="t-sm t-muted" style={{ lineHeight: 1.65 }}>
-                  Revenue is settled directly to your Aleo wallet. OnlyAleo tracks verified payments and subscriber activity, but it does not hold creator funds in escrow.
+                  Revenue is settled directly to your Aleo wallet. InnerCircle tracks verified payments and subscriber activity, but it does not hold creator funds in escrow.
                 </p>
                 <div className="row" style={{ justifyContent: "space-between", gap: "var(--s3)", flexWrap: "wrap" }}>
                   <span className="t-sm t-muted">Revenue mix</span>

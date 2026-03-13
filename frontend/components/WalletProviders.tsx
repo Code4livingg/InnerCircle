@@ -17,7 +17,7 @@ const PROGRAM_IDS = [
 const wallets = [
     new ShieldWalletAdapter(),
     new PuzzleWalletAdapter({
-        appName: "OnlyAleo",
+        appName: "InnerCircle",
         appDescription: "Privacy-first creator platform on Aleo",
         programIdPermissions: {
             [Network.TESTNET]: PROGRAM_IDS,

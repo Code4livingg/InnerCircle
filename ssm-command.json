@@ -1,0 +1,13 @@
+{
+    "Parameters":  {
+                       "commands":  [
+                                        "rustc --version || true",
+                                        "cargo --version || true",
+                                        "uname -a"
+                                    ]
+                   },
+    "DocumentName":  "AWS-RunShellScript",
+    "InstanceIds":  [
+                        "i-0fe6ec9522ee91cef"
+                    ]
+}

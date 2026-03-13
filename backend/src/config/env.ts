@@ -17,6 +17,8 @@ const envSchema = z.object({
   AWS_SECRET_ACCESS_KEY: z.string().min(1),
   S3_BUCKET_NAME: z.string().min(1),
   SIGNED_URL_EXPIRATION: z.coerce.number().int().positive().default(60),
+  IVS_REGION: z.string().min(1).default("ap-southeast-2"),
+  IVS_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
 
   DATABASE_URL: z.string().min(10),
   DB_CONNECT_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(5),
@@ -42,6 +44,7 @@ const envSchema = z.object({
   SUBSCRIPTION_PROGRAM_ID: z.string().default("sub_pay_v3_xwnxp.aleo"),
   PPV_PROGRAM_ID: z.string().default("ppv_pay_v2_xwnxp.aleo"),
   CREATOR_REGISTRY_PROGRAM_ID: z.string().default("creator_reg_v2_xwnxp.aleo"),
+  ACCESS_PASS_PROGRAM_ID: z.string().default("access_pass_v1_xwnxp.aleo"),
   MASTER_KEY_BASE64: z.string().min(10),
 
   CONTENT_CHUNK_SIZE_BYTES: z.coerce.number().int().positive().default(1_048_576),
@@ -101,6 +104,8 @@ export const env = {
   awsSecretAccessKey: parsed.AWS_SECRET_ACCESS_KEY,
   s3BucketName: parsed.S3_BUCKET_NAME,
   signedUrlExpirationSeconds: parsed.SIGNED_URL_EXPIRATION,
+  ivsRegion: parsed.IVS_REGION,
+  ivsTokenTtlSeconds: parsed.IVS_TOKEN_TTL_SECONDS,
   databaseUrl: withPostgresTimeout(parsed.DATABASE_URL, parsed.DB_CONNECT_TIMEOUT_SECONDS),
   dbConnectTimeoutSeconds: parsed.DB_CONNECT_TIMEOUT_SECONDS,
   rateLimitWindowMs: parsed.RATE_LIMIT_WINDOW_MS,
@@ -121,6 +126,7 @@ export const env = {
   subscriptionProgramId: parsed.SUBSCRIPTION_PROGRAM_ID,
   ppvProgramId: parsed.PPV_PROGRAM_ID,
   creatorRegistryProgramId: parsed.CREATOR_REGISTRY_PROGRAM_ID,
+  accessPassProgramId: parsed.ACCESS_PASS_PROGRAM_ID,
   masterKeyBase64: parsed.MASTER_KEY_BASE64,
   contentChunkSizeBytes: parsed.CONTENT_CHUNK_SIZE_BYTES,
 };

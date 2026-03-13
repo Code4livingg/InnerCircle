@@ -1,5 +1,5 @@
 {
-  "name": "onlyaleo-frontend",
+  "name": "innercircle-frontend",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -19,6 +19,8 @@
     "@provablehq/aleo-wallet-adaptor-shield": "^0.3.0-alpha.3",
     "@provablehq/aleo-wallet-adaptor-soter": "^0.3.0-alpha.3",
     "@provablehq/aleo-wallet-standard": "^0.3.0-alpha.3",
+    "amazon-ivs-player": "^1.49.0",
+    "amazon-ivs-web-broadcast": "^1.32.0",
     "next": "^15.0.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

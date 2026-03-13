@@ -4,5 +4,5 @@ import { env } from "./config/env.js";
 const app = createApp();
 
 app.listen(env.port, () => {
-  console.log(`onlyaleo-backend listening on :${env.port}`);
+  console.log(`innercircle-backend listening on :${env.port}`);
 });

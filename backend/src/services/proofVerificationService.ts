@@ -16,6 +16,13 @@ export interface ContentAccessProofInput {
   walletAddressHint?: string;
 }
 
+export interface AccessPassProofInput {
+  creatorFieldId: string;
+  contentFieldId: string;
+  proveTxId?: string;
+  walletAddressHint?: string;
+}
+
 export interface VerifiedOwnership {
   walletHash: string;
   resourceFieldId: string;
@@ -39,6 +46,15 @@ export interface PpvPaymentInput {
   expectedRecipientAddress?: string;
 }
 
+export interface AccessPassPaymentInput {
+  creatorFieldId: string;
+  contentFieldId: string;
+  purchaseTxId?: string;
+  walletAddressHint?: string;
+  expectedPriceMicrocredits?: bigint;
+  expectedRecipientAddress?: string;
+}
+
 const toFieldLiteral = (value: string): string => (value.endsWith("field") ? value : `${value}field`);
 const toU64Literal = (value: bigint): string => `${value}u64`;
 
@@ -47,6 +63,12 @@ const normalizeLiteral = (value: string): string => value.trim().replace(/\.(pub
 const includesLiteral = (values: string[], expected: string): boolean => {
   const normalizedExpected = normalizeLiteral(expected);
   return values.some((value) => normalizeLiteral(value) === normalizedExpected);
+};
+
+const assertIncludesLiteral = (values: string[], expected: string, label: string): void => {
+  if (!includesLiteral(values, expected)) {
+    throw new Error(`${label} mismatch`);
+  }
 };
 
 const hasUnsignedIntegerLiteral = (values: string[]): boolean => {
@@ -273,6 +295,39 @@ export const verifyContentAccessProof = async (
   };
 };
 
+export const verifyAccessPassProof = async (
+  input: AccessPassProofInput,
+): Promise<VerifiedOwnership> => {
+  if (env.proofVerificationMode === "mock") {
+    return verifyMockOnly(input.contentFieldId, input.walletAddressHint);
+  }
+
+  if (!input.proveTxId) {
+    throw new Error("Missing proveTxId. Expected an on-chain execute tx calling prove_access.");
+  }
+
+  const tx = await fetchExplorerTx(input.proveTxId);
+  const transition = findTransition(tx, env.accessPassProgramId, "prove_access");
+  if (!transition) {
+    throw new Error("prove_access transition not found in transaction");
+  }
+
+  if (!txAppearsAccepted(tx)) {
+    throw new Error(`Transaction ${input.proveTxId} is not accepted yet`);
+  }
+
+  const publicInputs = publicInputsFromTransition(transition);
+  assertIncludesLiteral(publicInputs, toFieldLiteral(input.creatorFieldId), "prove_access public creatorId");
+  assertIncludesLiteral(publicInputs, toFieldLiteral(input.contentFieldId), "prove_access public contentId");
+
+  const address = extractFeePayerAddress(tx) ?? input.walletAddressHint;
+  return {
+    walletHash: walletHash(resolveWalletAddress(address)),
+    resourceFieldId: input.contentFieldId,
+    provedByTxId: input.proveTxId,
+  };
+};
+
 export const verifySubscriptionPayment = async (
   input: SubscriptionPaymentInput,
 ): Promise<VerifiedOwnership> => {
@@ -360,6 +415,48 @@ export const verifyPpvPayment = async (
 
   return {
     walletHash: verified.walletHash,
+    resourceFieldId: input.contentFieldId,
+    provedByTxId: input.purchaseTxId,
+  };
+};
+
+export const verifyAccessPassPayment = async (
+  input: AccessPassPaymentInput,
+): Promise<VerifiedOwnership> => {
+  if (env.proofVerificationMode === "mock") {
+    return verifyMockOnly(input.contentFieldId, input.walletAddressHint);
+  }
+
+  if (!input.purchaseTxId) {
+    throw new Error("Missing purchaseTxId. Expected an on-chain execute tx calling buy_access.");
+  }
+
+  const tx = await fetchExplorerTx(input.purchaseTxId);
+  const transition = findTransition(tx, env.accessPassProgramId, "buy_access");
+  if (!transition) {
+    throw new Error("buy_access transition not found in transaction");
+  }
+
+  if (!txAppearsAccepted(tx)) {
+    throw new Error(`Transaction ${input.purchaseTxId} is not accepted yet`);
+  }
+
+  const publicInputs = publicInputsFromTransition(transition);
+  assertIncludesLiteral(publicInputs, toFieldLiteral(input.creatorFieldId), "buy_access public creatorId");
+  assertIncludesLiteral(publicInputs, toFieldLiteral(input.contentFieldId), "buy_access public contentId");
+
+  if (input.expectedRecipientAddress) {
+    assertIncludesLiteral(publicInputs, input.expectedRecipientAddress, "buy_access public creatorAddress");
+  }
+
+  if (typeof input.expectedPriceMicrocredits === "bigint") {
+    const expectedPrice = toU64Literal(input.expectedPriceMicrocredits);
+    assertIncludesLiteral(publicInputs, expectedPrice, "buy_access public price");
+  }
+
+  const address = extractFeePayerAddress(tx) ?? input.walletAddressHint;
+  return {
+    walletHash: walletHash(resolveWalletAddress(address)),
     resourceFieldId: input.contentFieldId,
     provedByTxId: input.purchaseTxId,
   };

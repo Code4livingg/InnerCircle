@@ -4,8 +4,8 @@ import { ApiError, claimWalletRoleLock, fetchWalletRoleLock } from "./api";
 
 export type AppRole = "user" | "creator";
 
-const LEGACY_ROLE_KEY = "onlyaleo_role";
-const ROLE_MAP_KEY = "onlyaleo_wallet_roles_v1";
+const LEGACY_ROLE_KEY = "innercircle_role";
+const ROLE_MAP_KEY = "innercircle_wallet_roles_v1";
 
 export class WalletRoleConflictError extends Error {
   readonly existingRole: AppRole;

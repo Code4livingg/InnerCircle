@@ -176,7 +176,7 @@ export default function CreatorDashboardPage() {
         setAnalytics(analyticsData);
 
         if (creatorData?.creator.handle) {
-          localStorage.setItem("onlyaleo_creator_handle", creatorData.creator.handle);
+          localStorage.setItem("innercircle_creator_handle", creatorData.creator.handle);
         }
       } finally {
         setLoading(false);

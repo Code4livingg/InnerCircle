@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { toApiUrl } from "@/lib/apiBase";
 import { useWallet } from "@/lib/walletContext";
 import { ApiError, fetchCreatorByWallet } from "../../../lib/api";
 import {
@@ -8,8 +9,6 @@ import {
     syncWalletRoleFromBackend,
     WalletRoleConflictError,
 } from "../../../lib/walletRole";
-
-const API = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080";
 
 const readApiError = async (res: Response): Promise<string> => {
     const data = (await res.json().catch(() => ({}))) as { error?: string };
@@ -67,7 +66,7 @@ export default function CreatorProfilePage() {
                         ? (Number(creator.subscriptionPriceMicrocredits) / 1_000_000).toString()
                         : "",
                 });
-                localStorage.setItem("onlyaleo_creator_handle", creator.handle);
+                localStorage.setItem("innercircle_creator_handle", creator.handle);
             } catch {
                 // Creator does not exist for this wallet yet.
             } finally {
@@ -94,7 +93,7 @@ export default function CreatorProfilePage() {
         try {
             await claimWalletRoleWithBackend(form.walletAddress, "creator");
 
-            const res = await fetch(`${API}/api/creators/register`, {
+            const res = await fetch(toApiUrl("/api/creators/register"), {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -111,7 +110,7 @@ export default function CreatorProfilePage() {
 
             if (form.subscriptionPrice) {
                 const microcredits = Math.round(parseFloat(form.subscriptionPrice) * 1_000_000);
-                const pricingRes = await fetch(`${API}/api/creators/pricing`, {
+                const pricingRes = await fetch(toApiUrl("/api/creators/pricing"), {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ walletAddress: form.walletAddress, subscriptionPriceMicrocredits: microcredits }),
@@ -121,7 +120,7 @@ export default function CreatorProfilePage() {
                 }
             }
 
-            localStorage.setItem("onlyaleo_creator_handle", form.handle);
+            localStorage.setItem("innercircle_creator_handle", form.handle);
             setSuccess(true);
         } catch (err) {
             if (err instanceof WalletRoleConflictError) {
@@ -162,7 +161,7 @@ export default function CreatorProfilePage() {
                 <div className="form-group">
                     <label className="form-label">Handle *</label>
                     <input className="form-input" placeholder="your-handle" value={form.handle} onChange={(e) => update("handle", e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ""))} id="profile-handle" />
-                    <span className="form-hint">Your public URL: onlyaleo.com/creator/{form.handle || "your-handle"}</span>
+                    <span className="form-hint">Your public URL: innercircle.com/creator/{form.handle || "your-handle"}</span>
                 </div>
                 <div className="form-group">
                     <label className="form-label">Display Name</label>

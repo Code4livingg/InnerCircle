@@ -1,5 +1,5 @@
 {
-  "name": "onlyaleo-backend",
+  "name": "innercircle-backend",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,7 +16,13 @@
     "db:studio": "prisma studio"
   },
   "dependencies": {
+    "@aws-sdk/client-apprunner": "^3.1006.0",
+    "@aws-sdk/client-ec2": "^3.1006.0",
+    "@aws-sdk/client-iam": "^3.1006.0",
+    "@aws-sdk/client-ivs": "^3.1007.0",
+    "@aws-sdk/client-rds": "^3.1006.0",
     "@aws-sdk/client-s3": "^3.1006.0",
+    "@aws-sdk/client-sts": "^3.1006.0",
     "@aws-sdk/s3-request-presigner": "^3.1006.0",
     "@prisma/client": "^6.2.1",
     "@provablehq/sdk": "^0.8.0",

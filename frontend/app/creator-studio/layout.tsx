@@ -12,7 +12,7 @@ export default function CreatorStudioLayout({ children }: { children: React.Reac
 
     useEffect(() => {
         if (!connected || !address) {
-            localStorage.removeItem("onlyaleo_creator_handle");
+            localStorage.removeItem("innercircle_creator_handle");
             setRole(null);
             return;
         }

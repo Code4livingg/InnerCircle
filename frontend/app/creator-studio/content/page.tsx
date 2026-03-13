@@ -20,7 +20,7 @@ export default function MyContentPage() {
 
                 const data = await fetchCreatorByWallet(address);
                 setContents(data.creator.contents);
-                localStorage.setItem("onlyaleo_creator_handle", data.creator.handle);
+                localStorage.setItem("innercircle_creator_handle", data.creator.handle);
             } catch {
                 setContents([]);
             } finally {

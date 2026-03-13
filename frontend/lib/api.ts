@@ -1,4 +1,4 @@
-﻿const base = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080";
+import { toApiUrl } from "./apiBase";
 
 interface ApiErrorPayload {
   error?: string;
@@ -18,12 +18,25 @@ export class ApiError extends Error {
 }
 
 const throwApiError = async (res: Response): Promise<never> => {
-  const payload = (await res.json().catch(() => ({}))) as ApiErrorPayload;
-  throw new ApiError(payload.error ?? "Request failed", res.status, payload.code);
+  let payload: ApiErrorPayload = {};
+
+  try {
+    payload = (await res.json()) as ApiErrorPayload;
+  } catch {
+    // Ignore parse errors and fall back to status text below
+  }
+
+  const fallbackMessage =
+    payload.error ??
+    (res.status >= 500 && res.status <= 504
+      ? "Could not reach the backend API. Is the server running?"
+      : res.statusText || "Request failed");
+
+  throw new ApiError(fallbackMessage, res.status, payload.code);
 };
 
 const postJson = async <T>(path: string, body: unknown): Promise<T> => {
-  const res = await fetch(`${base}${path}`, {
+  const res = await fetch(toApiUrl(path), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -36,8 +49,25 @@ const postJson = async <T>(path: string, body: unknown): Promise<T> => {
   return (await res.json()) as T;
 };
 
+const postJsonWithHeaders = async <T>(path: string, body: unknown, headers: HeadersInit): Promise<T> => {
+  const res = await fetch(toApiUrl(path), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...headers,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    return throwApiError(res);
+  }
+
+  return (await res.json()) as T;
+};
+
 const getJson = async <T>(path: string): Promise<T> => {
-  const res = await fetch(`${base}${path}`, { cache: "no-store" });
+  const res = await fetch(toApiUrl(path), { cache: "no-store" });
   if (!res.ok) {
     return throwApiError(res);
   }
@@ -45,7 +75,7 @@ const getJson = async <T>(path: string): Promise<T> => {
 };
 
 const getJsonWithHeaders = async <T>(path: string, headers: HeadersInit): Promise<T> => {
-  const res = await fetch(`${base}${path}`, {
+  const res = await fetch(toApiUrl(path), {
     cache: "no-store",
     headers,
   });
@@ -219,6 +249,54 @@ export interface VerifyWalletSignatureResponse {
   aleoNetwork: string;
 }
 
+export interface WalletSessionResponse {
+  token: string;
+  expiresAt: number;
+  walletHash: string;
+  network: string;
+  aleoNetwork: string;
+}
+
+export interface LiveStream {
+  id: string;
+  title: string;
+  accessType: Extract<ContentAccessType, "SUBSCRIPTION" | "PPV">;
+  ppvPriceMicrocredits: string | null;
+  status: "live" | "offline" | string;
+  startedAt: string | null;
+  endedAt: string | null;
+  createdAt: string;
+  creatorId: string;
+  creator: {
+    handle: string;
+    displayName: string | null;
+    isVerified: boolean;
+    walletAddress: string | null;
+    subscriptionPriceMicrocredits: string | null;
+  };
+}
+
+export interface CreateLiveStreamResponse {
+  liveStreamId: string;
+  ingestEndpoint: string;
+  streamKeyValue: string;
+  playbackUrl: string;
+}
+
+export interface LiveStreamPlaybackTokenResponse {
+  url: string;
+  expiresAt: number;
+}
+
+export interface VerifyLiveStreamPurchaseResponse {
+  ok: boolean;
+  txId: string;
+  liveStreamId: string;
+  purchaseFieldId: string;
+  priceMicrocredits: string;
+  verifiedAt: string;
+}
+
 export interface SessionProofPayload {
   txId: string;
   programId?: string;
@@ -352,3 +430,60 @@ export const verifyWalletSignature = (
   signature: string,
 ): Promise<VerifyWalletSignatureResponse> =>
   postJson("/api/wallet/verify-signature", { walletAddress, message, signature });
+
+export const createWalletSession = (
+  walletAddress: string,
+  message: string,
+  signature: string,
+): Promise<WalletSessionResponse> =>
+  postJson("/api/wallet/session", { walletAddress, message, signature, purpose: "wallet-session" });
+
+export const fetchLiveStreams = (walletToken: string): Promise<{ liveStreams: LiveStream[] }> =>
+  getJsonWithHeaders("/api/livestreams", {
+    Authorization: `Bearer ${walletToken}`,
+  });
+
+export const fetchLiveStreamById = (liveStreamId: string, walletToken: string): Promise<{ liveStream: LiveStream }> =>
+  getJsonWithHeaders(`/api/livestreams/${encodeURIComponent(liveStreamId)}`, {
+    Authorization: `Bearer ${walletToken}`,
+  });
+
+export const createCreatorLiveStream = (
+  body: {
+    title: string;
+    accessType: "SUBSCRIPTION" | "PPV";
+    ppvPriceMicrocredits?: string | number | bigint;
+  },
+  walletToken: string,
+): Promise<CreateLiveStreamResponse> =>
+  postJsonWithHeaders("/api/livestreams", body, {
+    Authorization: `Bearer ${walletToken}`,
+  });
+
+export const fetchLiveStreamPlaybackToken = (
+  liveStreamId: string,
+  walletToken: string,
+): Promise<LiveStreamPlaybackTokenResponse> =>
+  getJsonWithHeaders(`/api/livestreams/${encodeURIComponent(liveStreamId)}/token`, {
+    Authorization: `Bearer ${walletToken}`,
+  });
+
+export const endCreatorLiveStream = (
+  liveStreamId: string,
+  walletToken: string,
+): Promise<{ ok: boolean; liveStreamId: string; status: string }> =>
+  postJsonWithHeaders(`/api/livestreams/${encodeURIComponent(liveStreamId)}/end`, {}, {
+    Authorization: `Bearer ${walletToken}`,
+  });
+
+export const verifyLiveStreamPurchase = (
+  liveStreamId: string,
+  body: {
+    txId: string;
+    walletAddressHint?: string;
+  },
+  walletToken: string,
+): Promise<VerifyLiveStreamPurchaseResponse> =>
+  postJsonWithHeaders(`/api/livestreams/${encodeURIComponent(liveStreamId)}/purchase/verify`, body, {
+    Authorization: `Bearer ${walletToken}`,
+  });

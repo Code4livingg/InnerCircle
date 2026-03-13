@@ -27,4 +27,5 @@ $programArgs = if ($Programs.Count -gt 0) {
   ""
 }
 
-wsl bash -lc "cd /mnt/c/Users/ankur/OneDrive/Desktop/OnlyAleo/aleo-contracts && NETWORK=$Network ENDPOINT=$Endpoint PRIVATE_KEY=$env:PRIVATE_KEY bash deploy.sh $programArgs"
+$wslRoot = (wsl wslpath -a $root).Trim()
+wsl bash -lc "cd '$wslRoot' && NETWORK=$Network ENDPOINT=$Endpoint PRIVATE_KEY=$env:PRIVATE_KEY bash deploy.sh $programArgs"

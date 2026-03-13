@@ -1,11 +1,10 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { toApiUrl } from "@/lib/apiBase";
 import { useWallet } from "@/lib/walletContext";
 import { fetchCreatorByWallet } from "../../../lib/api";
 import { claimWalletRoleWithBackend, WalletRoleConflictError } from "../../../lib/walletRole";
-
-const API = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080";
 
 export default function UploadPage() {
     const { address } = useWallet();
@@ -43,7 +42,7 @@ export default function UploadPage() {
             try {
                 await claimWalletRoleWithBackend(address, "creator");
                 const data = await fetchCreatorByWallet(address);
-                localStorage.setItem("onlyaleo_creator_handle", data.creator.handle);
+                localStorage.setItem("innercircle_creator_handle", data.creator.handle);
             } catch (err) {
                 if (err instanceof WalletRoleConflictError) {
                     setError(`This wallet is locked as ${err.existingRole}. Use a different wallet for ${err.requestedRole}.`);
@@ -93,7 +92,7 @@ export default function UploadPage() {
                 body.append("ppvPriceMicrocredits", String(Math.round(parseFloat(form.ppvPrice) * 1_000_000)));
             }
 
-            const res = await fetch(`${API}/api/content/upload`, { method: "POST", body });
+            const res = await fetch(toApiUrl("/api/content/upload"), { method: "POST", body });
 
             const contentType = res.headers.get("content-type") ?? "";
             let payload: { error?: string } = {};

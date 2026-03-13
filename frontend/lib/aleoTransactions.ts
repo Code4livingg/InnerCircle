@@ -650,8 +650,8 @@ const requestExecutionViaRawWallet = async (
     };
 
   if (process.env.NODE_ENV !== "production" && isShield) {
-    console.warn("[OnlyAleo][Shield] raw request payload", requestData);
-    console.warn("[OnlyAleo][Shield] raw request payload json", JSON.stringify(requestData));
+    console.warn("[InnerCircle][Shield] raw request payload", requestData);
+    console.warn("[InnerCircle][Shield] raw request payload json", JSON.stringify(requestData));
   }
 
   for (const raw of getRawExecutionWallets(wallet)) {
@@ -1652,7 +1652,7 @@ export const pollExplorerForTxId = async (
       if (!response.ok) {
         if (await shouldStopExplorerProgramPolling(response)) {
           if (process.env.NODE_ENV !== "production") {
-            console.warn("[OnlyAleo] explorer program transaction polling unsupported", {
+            console.warn("[InnerCircle] explorer program transaction polling unsupported", {
               programId,
               status: response.status,
               url,
@@ -1753,8 +1753,8 @@ export const executeProgramTransaction = async ({
         };
 
         if (process.env.NODE_ENV !== "production" && isShield) {
-          console.warn("[OnlyAleo][Shield] program attempt", txRequest);
-          console.warn("[OnlyAleo][Shield] program attempt payload", JSON.stringify(txRequest));
+          console.warn("[InnerCircle][Shield] program attempt", txRequest);
+          console.warn("[InnerCircle][Shield] program attempt payload", JSON.stringify(txRequest));
         }
 
         const txId = await requestTransactionCompat(wallet, txRequest);
@@ -1887,8 +1887,8 @@ export const executeCreditsTransfer = async ({
           };
 
           if (process.env.NODE_ENV !== "production" && isShield) {
-            console.warn("[OnlyAleo][Shield] payment attempt", txRequest);
-            console.warn("[OnlyAleo][Shield] payment attempt payload", JSON.stringify(txRequest));
+            console.warn("[InnerCircle][Shield] payment attempt", txRequest);
+            console.warn("[InnerCircle][Shield] payment attempt payload", JSON.stringify(txRequest));
           }
 
           return await requestTransactionCompat(wallet, txRequest);

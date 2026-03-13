@@ -1,12 +1,11 @@
 ﻿"use client";
 
 import { useMemo, useState } from "react";
+import { toApiUrl } from "@/lib/apiBase";
 import { useWallet } from "@/lib/walletContext";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080";
-
 const postJson = async <T,>(path: string, body: unknown): Promise<T> => {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(toApiUrl(path), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -23,8 +22,8 @@ const postJson = async <T,>(path: string, body: unknown): Promise<T> => {
 export default function CreatorDashboardPage() {
   const { publicKey, connected } = useWallet();
 
-  const [handle, setHandle] = useState("onlyaleo_creator");
-  const [displayName, setDisplayName] = useState("OnlyAleo Creator");
+  const [handle, setHandle] = useState("innercircle_creator");
+  const [displayName, setDisplayName] = useState("InnerCircle Creator");
   const [bio, setBio] = useState("Privacy-first creator on Aleo.");
   const [subscriptionPriceMicrocredits, setSubscriptionPriceMicrocredits] = useState("0");
 
@@ -94,7 +93,7 @@ export default function CreatorDashboardPage() {
       form.set("ppvPriceMicrocredits", uploadPrice);
       form.set("isPublished", String(uploadPublished));
 
-      const res = await fetch(`${API_BASE}/api/content/upload`, {
+      const res = await fetch(toApiUrl("/api/content/upload"), {
         method: "POST",
         body: form,
       });

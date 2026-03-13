@@ -7,8 +7,12 @@ type SignerAccount = {
 };
 
 type SignerLike = {
+  signMessage?: (message: Uint8Array | string) => unknown;
   account?: SignerAccount;
-  wallet?: { account?: SignerAccount };
+  wallet?: {
+    account?: SignerAccount;
+    signMessage?: (message: Uint8Array | string) => unknown;
+  };
 };
 
 const extractSignatureString = (value: unknown): string | undefined => {
@@ -16,11 +20,33 @@ const extractSignatureString = (value: unknown): string | undefined => {
     return value.trim();
   }
 
+  if (value instanceof Uint8Array) {
+    const decoded = new TextDecoder().decode(value).trim();
+    return decoded.length > 0 ? decoded : undefined;
+  }
+
+  if (value instanceof ArrayBuffer) {
+    const decoded = new TextDecoder().decode(new Uint8Array(value)).trim();
+    return decoded.length > 0 ? decoded : undefined;
+  }
+
+  if (ArrayBuffer.isView(value)) {
+    const decoded = new TextDecoder().decode(
+      new Uint8Array(value.buffer, value.byteOffset, value.byteLength),
+    ).trim();
+    return decoded.length > 0 ? decoded : undefined;
+  }
+
   if (!value || typeof value !== "object") {
     return undefined;
   }
 
   const record = value as Record<string, unknown>;
+  const nestedSignature = extractSignatureString(record.signature);
+  if (nestedSignature) {
+    return nestedSignature;
+  }
+
   const direct = record.to_string;
   if (typeof direct === "function") {
     const out = direct.call(value);
@@ -52,6 +78,7 @@ const getSignerCandidates = (wallet: WalletContextState): SignerLike[] => {
     candidates.push(candidate as SignerLike);
   };
 
+  add(wallet);
   add(wallet.wallet?.adapter);
   add((wallet.wallet?.adapter as Record<string, unknown> | undefined)?.["_shieldWallet"]);
   add((wallet.wallet?.adapter as Record<string, unknown> | undefined)?.["_leoWallet"]);
@@ -84,6 +111,31 @@ const getSignerCandidates = (wallet: WalletContextState): SignerLike[] => {
   return candidates;
 };
 
+const trySignWithMethod = async (
+  target: unknown,
+  method: unknown,
+  message: string,
+  messageBytes: Uint8Array,
+): Promise<string | undefined> => {
+  if (typeof method !== "function") {
+    return undefined;
+  }
+
+  for (const payload of [messageBytes, message]) {
+    try {
+      const result = await Promise.resolve(method.call(target, payload));
+      const signature = extractSignatureString(result);
+      if (signature) {
+        return signature;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return undefined;
+};
+
 export const signAleoWalletMessage = async (
   wallet: WalletContextState,
   message: string,
@@ -91,17 +143,36 @@ export const signAleoWalletMessage = async (
   const messageBytes = new TextEncoder().encode(message);
 
   for (const candidate of getSignerCandidates(wallet)) {
+    const directSignature = await trySignWithMethod(candidate, candidate.signMessage, message, messageBytes);
+    if (directSignature) {
+      return directSignature;
+    }
+
+    const nestedSignature = await trySignWithMethod(
+      candidate.wallet,
+      candidate.wallet?.signMessage,
+      message,
+      messageBytes,
+    );
+    if (nestedSignature) {
+      return nestedSignature;
+    }
+
     const signer = candidate.account ?? candidate.wallet?.account;
     if (!signer || typeof signer.sign !== "function") {
       continue;
     }
 
-    const result = await Promise.resolve(signer.sign(messageBytes));
-    const signature = extractSignatureString(result);
-    if (signature) {
-      return signature;
+    try {
+      const result = await Promise.resolve(signer.sign(messageBytes));
+      const signature = extractSignatureString(result);
+      if (signature) {
+        return signature;
+      }
+    } catch {
+      continue;
     }
   }
 
-  throw new Error("Selected wallet does not expose account.sign() for Aleo signatures.");
+  throw new Error("Selected wallet does not support Aleo message signing.");
 };
