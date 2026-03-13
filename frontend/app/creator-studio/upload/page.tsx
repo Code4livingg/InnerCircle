@@ -8,7 +8,8 @@ import { claimWalletRoleWithBackend, WalletRoleConflictError } from "../../../li
 import { getWalletSessionToken } from "../../../lib/walletSession";
 
 export default function UploadPage() {
-    const { address } = useWallet();
+    const wallet = useWallet();
+    const { address } = wallet;
 
     const [file, setFile] = useState<File | null>(null);
     const [thumb, setThumb] = useState<File | null>(null);
