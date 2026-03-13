@@ -3,17 +3,25 @@ const DEFAULT_LOCAL_API_BASE = "http://localhost:8080";
 const trimTrailingSlash = (value: string): string =>
   value.endsWith("/") ? value.slice(0, -1) : value;
 
-export const getApiBase = (): string => {
-  const configured = process.env.NEXT_PUBLIC_API_BASE?.trim();
+const getServerApiBase = (): string => {
+  const configured =
+    process.env.API_PROXY_BASE?.trim() ??
+    process.env.NEXT_PUBLIC_API_BASE?.trim();
+
   if (configured) {
     return trimTrailingSlash(configured);
   }
 
-  if (typeof window === "undefined") {
-    return DEFAULT_LOCAL_API_BASE;
+  return DEFAULT_LOCAL_API_BASE;
+};
+
+export const getApiBase = (): string => {
+  // Always use same-origin /api in the browser to avoid mixed-content issues.
+  if (typeof window !== "undefined") {
+    return "";
   }
 
-  return "";
+  return getServerApiBase();
 };
 
 export const toApiUrl = (path: string): string => `${getApiBase()}${path}`;
