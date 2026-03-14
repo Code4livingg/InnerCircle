@@ -65,6 +65,15 @@ const isTipAlreadyRecorded = (error: unknown): boolean =>
   error.status === 409 &&
   /already recorded/i.test(error.message ?? "");
 
+const isNonFatalTipRecordError = (error: unknown): boolean => {
+  const message = (error as Error)?.message?.toLowerCase() ?? "";
+  if (message.includes("request failed") || message.includes("failed to fetch")) {
+    return true;
+  }
+
+  return error instanceof ApiError && error.status >= 500;
+};
+
 const formatCredits = (microcredits: string | null): string => {
   const value = Number(microcredits ?? "0");
   return `${(value / 1_000_000).toFixed(2)} credits / month`;
@@ -446,6 +455,8 @@ export default function CreatorPage({ params }: CreatorPageProps) {
         } catch (error) {
           if (isTipAlreadyRecorded(error)) {
             setTipSuccess("Anonymous tip already recorded.");
+          } else if (isNonFatalTipRecordError(error)) {
+            setTipSuccess("Anonymous tip sent on-chain. Backend verification pending.");
           } else {
             throw error;
           }
@@ -491,6 +502,8 @@ export default function CreatorPage({ params }: CreatorPageProps) {
         } catch (error) {
           if (isTipAlreadyRecorded(error)) {
             setTipSuccess("Tip already recorded.");
+          } else if (isNonFatalTipRecordError(error)) {
+            setTipSuccess("Tip sent on-chain. Backend verification pending.");
           } else {
             throw error;
           }
