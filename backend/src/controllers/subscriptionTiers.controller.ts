@@ -171,7 +171,7 @@ export const updateSubscriptionTier = async (req: WalletSessionRequest, res: Res
 
     const tier = await prisma.subscriptionTier.findUnique({
       where: { id: tierId },
-      select: { id: true, creator: { select: { walletHash: true } } },
+      select: { id: true, creatorId: true, creator: { select: { walletHash: true } } },
     });
 
     if (!tier) {
@@ -194,7 +194,7 @@ export const updateSubscriptionTier = async (req: WalletSessionRequest, res: Res
       },
     });
 
-    await syncCreatorPricing(tier.creator.id);
+    await syncCreatorPricing(tier.creatorId);
 
     res.json({ tier: serializeTier(updated) });
   } catch (error) {
@@ -222,7 +222,7 @@ export const deleteSubscriptionTier = async (req: WalletSessionRequest, res: Res
 
     const tier = await prisma.subscriptionTier.findUnique({
       where: { id: tierId },
-      select: { id: true, creator: { select: { walletHash: true } } },
+      select: { id: true, creatorId: true, creator: { select: { walletHash: true } } },
     });
 
     if (!tier) {
@@ -236,7 +236,7 @@ export const deleteSubscriptionTier = async (req: WalletSessionRequest, res: Res
     }
 
     await prisma.subscriptionTier.delete({ where: { id: tier.id } });
-    await syncCreatorPricing(tier.creator.id);
+    await syncCreatorPricing(tier.creatorId);
 
     res.json({ ok: true, tierId: tier.id });
   } catch (error) {

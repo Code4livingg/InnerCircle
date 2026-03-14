@@ -122,6 +122,10 @@ On Windows PowerShell:
 
 After deployment, update program IDs in your backend and frontend environment configuration. Avoid hardcoding program IDs in source.
 
+### Testnet Deployment Tx IDs
+
+- `tip_pay_v1_xwnxp.aleo` upgrade tx: `at1gg0zf3kwuj3hxlg44yn7yy7x3jv0a4k7t6puhexwlfkd4x9v7ugqa08dzv`
+
 ## Security and Privacy
 
 - Ownership records are private Aleo records; no public subscriber lists.

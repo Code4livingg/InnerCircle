@@ -39,9 +39,11 @@ Subscriptions are verified against on-chain payments and stored as verified purc
 - Tier gating: enforced when issuing media URLs (purchase price vs required tier price)
 
 ## Tipping System
-Tips are private by default, with optional anonymity and messages.
+Tips are enforced on-chain. Public tips use `credits.aleo/transfer_public`, while anonymous tips use a private
+tip program (`tip_pay_v1_xwnxp.aleo`) that pays from private balance and proves the amount without revealing identity.
 
-- Create tip: `POST /api/tips` (wallet session required)
+- Public tip: `POST /api/tips` (wallet session + `txId`)
+- Anonymous tip: `POST /api/tips/anonymous` (no session, `txId` from `tip_private`)
 - Tip history: `GET /api/tips/history` (fan) or `GET /api/tips/creator/:handle` (creator)
 - Leaderboard: `GET /api/tips/leaderboard/:handle` (public, anonymous tips excluded)
 

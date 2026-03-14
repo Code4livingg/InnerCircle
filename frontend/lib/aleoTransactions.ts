@@ -8,6 +8,7 @@ const ALEO_EXPLORER_API =
   process.env.NEXT_PUBLIC_ALEO_EXPLORER_API?.trim() || "https://api.explorer.provable.com/v1";
 const ALEO_EXPLORER_NETWORK =
   process.env.NEXT_PUBLIC_ALEO_NETWORK?.trim().toLowerCase() === "mainnet" ? "mainnet" : "testnet";
+const TIP_PROGRAM_ID = process.env.NEXT_PUBLIC_TIP_PROGRAM_ID?.trim() || "tip_pay_v1_xwnxp.aleo";
 
 interface TransactionResult {
   transactionId?: string;
@@ -323,6 +324,68 @@ const parseMicrocreditsValue = (
   return undefined;
 };
 
+const parseMicrocreditsFromRecordLiteral = (literal: string): bigint | undefined => {
+  const match = literal.match(/([0-9]+)u64/i);
+  if (!match) return undefined;
+  return BigInt(match[1]);
+};
+
+const extractRecordLiteral = (record: unknown): string | undefined => {
+  if (typeof record === "string") {
+    return record.trim();
+  }
+
+  if (!record || typeof record !== "object") {
+    return undefined;
+  }
+
+  const obj = record as Record<string, unknown>;
+  const candidates = [
+    obj.record,
+    obj.plaintext,
+    obj.value,
+    obj.data,
+    obj.recordString,
+    obj.plaintextRecord,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+
+  return undefined;
+};
+
+const pickPrivateCreditsRecord = async (
+  wallet: WalletContextState,
+  minMicrocredits: bigint,
+): Promise<{ literal: string; index?: number; balance?: bigint }> => {
+  if (typeof wallet.requestRecordPlaintexts !== "function") {
+    throw new Error("Wallet does not support private record access for anonymous tips.");
+  }
+
+  const records = await wallet.requestRecordPlaintexts("credits.aleo");
+  if (!Array.isArray(records) || records.length === 0) {
+    throw new Error("No private credits records found. You need private balance for anonymous tips.");
+  }
+
+  for (let i = 0; i < records.length; i += 1) {
+    const record = records[i];
+    const literal = extractRecordLiteral(record);
+    const balance =
+      parseMicrocreditsValue(record) ??
+      (typeof literal === "string" ? parseMicrocreditsFromRecordLiteral(literal) : undefined);
+
+    if (literal && typeof balance === "bigint" && balance >= minMicrocredits) {
+      return { literal, index: i, balance };
+    }
+  }
+
+  throw new Error("No private credits record large enough for this tip amount.");
+};
+
 const fetchExplorerPublicBalanceMicrocredits = async (address: string): Promise<bigint | undefined> => {
   if (!address || !address.startsWith("aleo1")) {
     return undefined;
@@ -373,7 +436,7 @@ const fetchKnownPublicBalanceMicrocredits = async (
 
 const isRetryablePayloadFormatError = (error: unknown): boolean => {
   const message = (error as Error)?.message?.toLowerCase() ?? "";
-  return /invalid transaction payload|shield rejected the transaction payload|rejected the transaction payload|invalid aleo program|invalid_params|failed to parse input|invalid payload|could not create transaction/.test(
+  return /invalid transaction payload|shield rejected the transaction payload|rejected the transaction payload|invalid aleo program|invalid_params|failed to parse input|failed to parse input #\d+ \\(u64\\.public\\)|invalid payload|could not create transaction/.test(
     message,
   );
 };
@@ -1331,6 +1394,7 @@ const uniqueStrings = (values: string[]): string[] => {
 const DEFAULT_HISTORY_PROGRAM_IDS = [
   "credits.aleo",
   "creator_reg_v2_xwnxp.aleo",
+  TIP_PROGRAM_ID,
 ];
 
 export const resolveChainTxIdFromHistory = async (
@@ -1708,6 +1772,7 @@ interface ExecuteProgramTxInput {
   feeAleo?: number;
   privateFee?: boolean;
   feePreference?: FeePreference;
+  recordIndices?: number[];
 }
 
 export const executeProgramTransaction = async ({
@@ -1718,6 +1783,7 @@ export const executeProgramTransaction = async ({
   feeAleo = EXECUTION_FEE_ALEO,
   privateFee = false,
   feePreference = "auto",
+  recordIndices,
 }: ExecuteProgramTxInput): Promise<string> => {
   if (!wallet.address || !wallet.address.startsWith("aleo1")) {
     throw new Error("Wallet is not connected to a valid Aleo address.");
@@ -1750,6 +1816,7 @@ export const executeProgramTransaction = async ({
           inputs,
           fee: feeCandidate,
           privateFee,
+          ...(recordIndices && recordIndices.length > 0 ? { recordIndices } : {}),
         };
 
         if (process.env.NODE_ENV !== "production" && isShield) {
@@ -1830,7 +1897,8 @@ export const executeCreditsTransfer = async ({
   if (!wallet.address || !wallet.address.startsWith("aleo1")) {
     throw new Error("Wallet is not connected to a valid Aleo address.");
   }
-  if (!recipientAddress || !recipientAddress.startsWith("aleo1")) {
+  const normalizedRecipient = recipientAddress?.trim() ?? "";
+  if (!normalizedRecipient || !normalizedRecipient.startsWith("aleo1")) {
     throw new Error("Recipient wallet address is missing or invalid.");
   }
 
@@ -1840,7 +1908,7 @@ export const executeCreditsTransfer = async ({
     throw new Error("Transfer amount must be greater than zero.");
   }
 
-  const inputs = [recipientAddress, amountInput];
+  const literalInputs = [normalizedRecipient, amountInput];
   const executionFeeMicrocredits = aleoToMicrocredits(feeAleo);
 
   // Balance check
@@ -1854,7 +1922,7 @@ export const executeCreditsTransfer = async ({
     }
   }
 
-  validateLiteralInputs("transfer_public", inputs);
+  validateLiteralInputs("transfer_public", literalInputs);
 
   const adapterName = getWalletAdapterName(wallet);
   const isShield = adapterName.toLowerCase().includes("shield");
@@ -1880,7 +1948,7 @@ export const executeCreditsTransfer = async ({
           const txRequest: TransactionOptions = {
             program: "credits.aleo",
             function: "transfer_public",
-            inputs,
+            inputs: literalInputs,
             fee: feeCandidate,
             privateFee: false,
             ...(recordIndicesCandidate ? { recordIndices: recordIndicesCandidate } : {}),
@@ -1958,4 +2026,52 @@ export const executeCreditsTransfer = async ({
       `Payment failed: ${(error as Error).message ?? "Payment transaction failed."}. wallet=${adapterName || "unknown"} program=credits.aleo function=transfer_public`,
     );
   }
+};
+
+interface ExecuteAnonymousTipInput {
+  wallet: WalletContextState;
+  creatorFieldId: string;
+  creatorAddress: string;
+  amountMicrocredits: string | number | bigint;
+  feeAleo?: number;
+  feePreference?: FeePreference;
+  tipProgramId?: string;
+}
+
+export const executeAnonymousTip = async ({
+  wallet,
+  creatorFieldId,
+  creatorAddress,
+  amountMicrocredits,
+  feeAleo = EXECUTION_FEE_ALEO,
+  feePreference = "auto",
+  tipProgramId = TIP_PROGRAM_ID,
+}: ExecuteAnonymousTipInput): Promise<string> => {
+  if (!creatorAddress || !creatorAddress.startsWith("aleo1")) {
+    throw new Error("Creator wallet address is missing or invalid.");
+  }
+
+  const amountLiteral = toU64Literal(amountMicrocredits);
+  const amountValue = BigInt(amountLiteral.replace(/u64$/i, ""));
+  if (amountValue <= 0n) {
+    throw new Error("Tip amount must be greater than zero.");
+  }
+
+  const record = await pickPrivateCreditsRecord(wallet, amountValue);
+  const inputs = [
+    toFieldLiteral(creatorFieldId),
+    creatorAddress,
+    amountLiteral,
+    record.literal,
+  ];
+
+  return executeProgramTransaction({
+    wallet,
+    programId: tipProgramId,
+    functionName: "tip_private",
+    inputs,
+    feeAleo,
+    feePreference,
+    recordIndices: typeof record.index === "number" ? [record.index] : undefined,
+  });
 };

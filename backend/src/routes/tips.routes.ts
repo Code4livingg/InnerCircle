@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   createTip,
+  createAnonymousTip,
   getCreatorTipHistory,
   getTipHistoryForFan,
   getTipLeaderboard,
@@ -10,8 +11,9 @@ import { requireWalletSession } from "../middleware/requireWalletSession.js";
 const tipsRouter = Router();
 
 tipsRouter.get("/leaderboard/:handle", getTipLeaderboard);
-tipsRouter.use(requireWalletSession);
+tipsRouter.post("/anonymous", createAnonymousTip);
 tipsRouter.post("/", createTip);
+tipsRouter.use(requireWalletSession);
 tipsRouter.get("/creator/:handle", getCreatorTipHistory);
 tipsRouter.get("/history", getTipHistoryForFan);
 

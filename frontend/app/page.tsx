@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import Link from "next/link";
 
@@ -6,60 +6,79 @@ export default function LandingPage() {
   return (
     <main className="lc-landing">
       <section className="lc-hero">
-        <div className="lc-hero__glow" aria-hidden="true" />
-        <div className="lc-hero__grid">
-          <div className="lc-hero__copy ic-fade-up">
-            <span className="lc-eyebrow">InnerCircle</span>
-            <h1 className="lc-hero__title">The Private Creator Economy</h1>
+        {/* Layered background gradients */}
+        <div className="lc-hero__bg" aria-hidden="true" />
+        {/* Subtle watermark brand text - low opacity, purely decorative */}
+        <div className="lc-hero__watermark" aria-hidden="true">INNERCIRCLE</div>
+
+        <div className="lc-hero__container">
+          {/* -- Left column: copy -- */}
+          <div className="lc-hero__copy">
+            <span className="lc-hero__eyebrow">
+              <span className="lc-hero__eyebrow-dot" />
+              Privacy-first Creator Platform
+            </span>
+
+            <h1 className="lc-hero__title">
+              The Private<br />Creator Economy
+            </h1>
+
             <p className="lc-hero__subtitle">
-              Launch paid memberships, share gated media, and accept private tips without giving up ownership.
-              InnerCircle uses wallet-based access, short-lived signed streams, and privacy-first analytics.
+              Launch paid memberships, share gated media, and accept private
+              tips, without giving up ownership.
             </p>
+
             <div className="lc-hero__actions">
-              <Link href="/wallet" className="btn btn--primary btn--lg">Connect Wallet</Link>
-              <Link href="/discover" className="btn btn--secondary btn--lg">Explore Creators</Link>
+              <Link href="/wallet" className="lc-hero__btn-primary">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="7" width="20" height="14" rx="2"/>
+                  <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
+                  <circle cx="12" cy="14" r="2" fill="currentColor" stroke="none"/>
+                </svg>
+                Connect Wallet
+              </Link>
+              <Link href="/discover" className="lc-hero__btn-secondary">
+                Explore Creators
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M5 12h14M12 5l7 7-7 7"/>
+                </svg>
+              </Link>
             </div>
-            <div className="lc-hero__stats">
-              <div className="lc-stat">
-                <span className="lc-stat__value">60-120s</span>
-                <span className="lc-stat__label">signed media windows</span>
-              </div>
-              <div className="lc-stat">
-                <span className="lc-stat__value">0</span>
-                <span className="lc-stat__label">identity fields required</span>
-              </div>
-              <div className="lc-stat">
-                <span className="lc-stat__value">100%</span>
-                <span className="lc-stat__label">creator-controlled pricing</span>
-              </div>
+
+            {/* Trust indicators */}
+            <div className="lc-hero__trust">
+              <span className="lc-trust-item">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+                Secure streaming
+              </span>
+              <span className="lc-trust-item">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+                Private subscriptions
+              </span>
+              <span className="lc-trust-item">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+                Creator-owned economy
+              </span>
             </div>
           </div>
 
-          <div className="lc-hero__panel ic-fade-up">
-            <div className="lc-hero__card">
-              <div className="lc-hero__card-header">
-                <span className="lc-pill">Creator Dashboard</span>
-                <span className="lc-dot" />
-              </div>
-              <h3>Monthly performance</h3>
-              <div className="lc-hero__metrics">
-                <div className="lc-metric">
-                  <span className="lc-metric__label">Active subscribers</span>
-                  <span className="lc-metric__value">842</span>
-                </div>
-                <div className="lc-metric">
-                  <span className="lc-metric__label">Revenue</span>
-                  <span className="lc-metric__value">3,480 credits</span>
-                </div>
-                <div className="lc-metric">
-                  <span className="lc-metric__label">Tips</span>
-                  <span className="lc-metric__value">126 private</span>
-                </div>
-              </div>
-              <div className="lc-hero__bar">
-                <div className="lc-hero__bar-fill" style={{ width: "78%" }} />
-              </div>
-              <p className="lc-hero__card-note">All metrics are computed from verified on-chain payments.</p>
+          {/* -- Right column: phone mockup -- */}
+          <div className="lc-hero__visual">
+            <div className="lc-hero__phone-aura" aria-hidden="true" />
+            <div className="lc-hero__phone">
+              <div className="lc-hero__phone-notch" aria-hidden="true" />
+              <img
+                src="/creator-woman.png"
+                alt="Creator on InnerCircle"
+                className="lc-hero__phone-img"
+              />
+              <div className="lc-hero__phone-shine" aria-hidden="true" />
             </div>
           </div>
         </div>

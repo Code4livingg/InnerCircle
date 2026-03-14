@@ -14,7 +14,7 @@ NETWORK="${NETWORK:-testnet}"
 ENDPOINT="${ENDPOINT:-https://api.explorer.provable.com/v1}"
 PRIORITY_FEES="${PRIORITY_FEES:-0}"
 
-DEFAULT_PROGRAMS=("subscription" "ppv" "creator_registry" "access_pass")
+DEFAULT_PROGRAMS=("subscription" "ppv" "creator_registry" "access_pass" "tip")
 PROGRAMS=("$@")
 
 if [[ ${#PROGRAMS[@]} -eq 0 ]]; then

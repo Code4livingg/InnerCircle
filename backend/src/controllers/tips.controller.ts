@@ -1,15 +1,25 @@
-import type { Response } from "express";
+import type { Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../db/prisma.js";
 import type { WalletSessionRequest } from "../middleware/requireWalletSession.js";
+import { ExplorerRequestError } from "../services/aleoExplorerService.js";
+import { verifyTipPayment, verifyTipProof } from "../services/proofVerificationService.js";
+import { validateWalletSessionToken, type WalletSessionClaims } from "../services/walletSessionService.js";
 import { ensureWalletRoleByHash } from "../services/walletRoleService.js";
 import { DB_UNAVAILABLE_CODE, DB_UNAVAILABLE_MESSAGE, isDatabaseUnavailableError } from "../utils/dbErrors.js";
 
-const tipSchema = z.object({
+const publicTipSchema = z.object({
   creatorHandle: z.string().min(3),
   amountMicrocredits: z.coerce.bigint().positive(),
   message: z.string().max(280).optional(),
-  isAnonymous: z.coerce.boolean().optional().default(false),
+  txId: z.string().min(10),
+});
+
+const anonymousTipSchema = z.object({
+  creatorHandle: z.string().min(3),
+  amountMicrocredits: z.coerce.bigint().positive(),
+  message: z.string().max(280).optional(),
+  txId: z.string().min(10),
 });
 
 const tipHistoryQuery = z.object({
@@ -20,22 +30,51 @@ const tipLeaderboardQuery = z.object({
   handle: z.string().min(3),
 });
 
-const shortHash = (value: string): string => `${value.slice(0, 6)}…${value.slice(-4)}`;
+const shortHash = (value: string): string => `${value.slice(0, 6)}...${value.slice(-4)}`;
+
+const isPendingTxError = (error: unknown): boolean => {
+  if (error instanceof ExplorerRequestError) {
+    return error.status === 404 || error.status >= 500;
+  }
+  return /not accepted yet/i.test((error as Error).message ?? "");
+};
+
+const isUniqueConstraintError = (error: unknown): boolean =>
+  typeof (error as { code?: string })?.code === "string" &&
+  (error as { code?: string }).code === "P2002";
+
+const resolveOptionalWalletSession = (req: Request): WalletSessionClaims | null => {
+  const header = req.headers.authorization;
+  if (!header) {
+    return null;
+  }
+
+  if (Array.isArray(header)) {
+    throw new Error("Invalid wallet session token");
+  }
+
+  if (!header.startsWith("Bearer ")) {
+    throw new Error("Invalid wallet session token");
+  }
+
+  return validateWalletSessionToken(header.slice("Bearer ".length));
+};
 
 export const createTip = async (req: WalletSessionRequest, res: Response): Promise<void> => {
   try {
-    const session = req.walletSession;
-    if (!session) {
-      res.status(401).json({ error: "Missing wallet session" });
+    let session: WalletSessionClaims | null = null;
+    try {
+      session = resolveOptionalWalletSession(req);
+    } catch (error) {
+      res.status(401).json({ error: (error as Error).message });
       return;
     }
 
-    const payload = tipSchema.parse(req.body);
-    await ensureWalletRoleByHash(session.wh, "FAN");
+    const payload = publicTipSchema.parse(req.body);
 
     const creator = await prisma.creator.findUnique({
       where: { handle: payload.creatorHandle.toLowerCase() },
-      select: { id: true, handle: true, walletHash: true },
+      select: { id: true, handle: true, walletHash: true, walletAddress: true, creatorFieldId: true },
     });
 
     if (!creator) {
@@ -43,18 +82,39 @@ export const createTip = async (req: WalletSessionRequest, res: Response): Promi
       return;
     }
 
-    if (creator.walletHash === session.wh) {
+    if (!creator.walletAddress || !creator.walletAddress.startsWith("aleo1")) {
+      res.status(400).json({ error: "Creator wallet address is missing." });
+      return;
+    }
+
+    const verified = await verifyTipPayment({
+      creatorFieldId: creator.creatorFieldId,
+      purchaseTxId: payload.txId,
+      expectedPriceMicrocredits: payload.amountMicrocredits,
+      expectedRecipientAddress: creator.walletAddress,
+      walletAddressHint: session?.addr,
+    });
+
+    if (session && verified.walletHash !== session.wh) {
+      res.status(403).json({ error: "Tip transaction does not belong to the signed-in wallet." });
+      return;
+    }
+
+    if (creator.walletHash === verified.walletHash) {
       res.status(409).json({ error: "Creators cannot tip themselves." });
       return;
     }
 
+    await ensureWalletRoleByHash(verified.walletHash, "FAN");
+
     const tip = await prisma.tip.create({
       data: {
         creatorId: creator.id,
-        walletHash: session.wh,
+        txId: payload.txId,
+        walletHash: verified.walletHash,
         amountMicrocredits: payload.amountMicrocredits,
         message: payload.message?.trim() || null,
-        isAnonymous: payload.isAnonymous ?? false,
+        isAnonymous: false,
       },
     });
 
@@ -71,6 +131,83 @@ export const createTip = async (req: WalletSessionRequest, res: Response): Promi
   } catch (error) {
     if (isDatabaseUnavailableError(error)) {
       res.status(503).json({ error: DB_UNAVAILABLE_MESSAGE, code: DB_UNAVAILABLE_CODE });
+      return;
+    }
+    if (isPendingTxError(error)) {
+      res.status(409).json({ error: "Transaction is still pending on Aleo explorer. Wait and retry.", code: "TX_PENDING" });
+      return;
+    }
+    if (isUniqueConstraintError(error)) {
+      res.status(409).json({ error: "Tip transaction already recorded." });
+      return;
+    }
+    res.status(400).json({ error: (error as Error).message });
+  }
+};
+
+export const createAnonymousTip = async (req: WalletSessionRequest, res: Response): Promise<void> => {
+  try {
+    const payload = anonymousTipSchema.parse(req.body);
+
+    const creator = await prisma.creator.findUnique({
+      where: { handle: payload.creatorHandle.toLowerCase() },
+      select: { id: true, handle: true, creatorFieldId: true, walletAddress: true, walletHash: true },
+    });
+
+    if (!creator) {
+      res.status(404).json({ error: "Creator not found" });
+      return;
+    }
+
+    if (!creator.walletAddress || !creator.walletAddress.startsWith("aleo1")) {
+      res.status(400).json({ error: "Creator wallet address is missing." });
+      return;
+    }
+
+    const verified = await verifyTipProof({
+      creatorFieldId: creator.creatorFieldId,
+      creatorAddress: creator.walletAddress,
+      amountMicrocredits: payload.amountMicrocredits,
+      txId: payload.txId,
+    });
+
+    if (creator.walletHash && creator.walletHash === verified.walletHash) {
+      res.status(409).json({ error: "Creators cannot tip themselves." });
+      return;
+    }
+
+    const tip = await prisma.tip.create({
+      data: {
+        creatorId: creator.id,
+        txId: payload.txId,
+        walletHash: verified.walletHash,
+        amountMicrocredits: payload.amountMicrocredits,
+        message: payload.message?.trim() || null,
+        isAnonymous: true,
+      },
+    });
+
+    res.json({
+      tip: {
+        id: tip.id,
+        creatorHandle: creator.handle,
+        amountMicrocredits: tip.amountMicrocredits.toString(),
+        message: tip.message,
+        isAnonymous: true,
+        createdAt: tip.createdAt.toISOString(),
+      },
+    });
+  } catch (error) {
+    if (isDatabaseUnavailableError(error)) {
+      res.status(503).json({ error: DB_UNAVAILABLE_MESSAGE, code: DB_UNAVAILABLE_CODE });
+      return;
+    }
+    if (isPendingTxError(error)) {
+      res.status(409).json({ error: "Transaction is still pending on Aleo explorer. Wait and retry.", code: "TX_PENDING" });
+      return;
+    }
+    if (isUniqueConstraintError(error)) {
+      res.status(409).json({ error: "Tip transaction already recorded." });
       return;
     }
     res.status(400).json({ error: (error as Error).message });

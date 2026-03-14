@@ -516,13 +516,23 @@ export const createTip = (
     creatorHandle: string;
     amountMicrocredits: string | number | bigint;
     message?: string;
-    isAnonymous?: boolean;
+    txId: string;
   },
-  walletToken: string,
+  walletToken?: string,
 ): Promise<{ tip: TipEntry }> =>
-  postJsonWithHeaders("/api/tips", body, {
-    Authorization: `Bearer ${walletToken}`,
-  });
+  walletToken
+    ? postJsonWithHeaders("/api/tips", body, {
+      Authorization: `Bearer ${walletToken}`,
+    })
+    : postJson("/api/tips", body);
+
+export const createAnonymousTip = (body: {
+  creatorHandle: string;
+  amountMicrocredits: string | number | bigint;
+  message?: string;
+  txId: string;
+}): Promise<{ tip: TipEntry }> =>
+  postJson("/api/tips/anonymous", body);
 
 export const fetchCreatorTipHistory = (creatorHandle: string, walletToken: string): Promise<{ tips: TipEntry[] }> =>
   getJsonWithHeaders(`/api/tips/creator/${encodeURIComponent(creatorHandle)}`, {

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useWallet } from "@/lib/walletContext";
 import { getWalletSessionToken } from "@/lib/walletSession";
 import {
+  ApiError,
   createSubscriptionTier,
   deleteSubscriptionTier,
   fetchMySubscriptionTiers,
@@ -44,6 +45,7 @@ export default function CreatorTiersPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [needsProfile, setNeedsProfile] = useState(false);
 
   const [newTier, setNewTier] = useState<TierDraft>({
     tierName: "",
@@ -74,12 +76,20 @@ export default function CreatorTiersPage() {
     try {
       setLoading(true);
       setError(null);
+      setNeedsProfile(false);
       const token = await getWalletSessionToken(wallet);
       const data = await fetchMySubscriptionTiers(token);
       setTiers(data.tiers);
       hydrateDrafts(data.tiers);
     } catch (err) {
-      setError((err as Error).message || "Failed to load tiers.");
+      if (err instanceof ApiError && err.status === 404) {
+        setNeedsProfile(true);
+        setTiers([]);
+        setDrafts({});
+        setError("Creator profile not found. Save your profile in the Profile tab to enable tiers.");
+      } else {
+        setError((err as Error).message || "Failed to load tiers.");
+      }
     } finally {
       setLoading(false);
     }
@@ -100,6 +110,10 @@ export default function CreatorTiersPage() {
   };
 
   const handleCreate = async () => {
+    if (needsProfile) {
+      setError("Save your creator profile first to create tiers.");
+      return;
+    }
     try {
       setSaving("new");
       setError(null);
@@ -123,6 +137,10 @@ export default function CreatorTiersPage() {
   };
 
   const handleSave = async (tierId: string) => {
+    if (needsProfile) {
+      setError("Save your creator profile first to edit tiers.");
+      return;
+    }
     const draft = drafts[tierId];
     if (!draft) return;
     try {
@@ -148,6 +166,10 @@ export default function CreatorTiersPage() {
   };
 
   const handleDelete = async (tierId: string) => {
+    if (needsProfile) {
+      setError("Save your creator profile first to manage tiers.");
+      return;
+    }
     try {
       setSaving(tierId);
       setError(null);
@@ -174,6 +196,11 @@ export default function CreatorTiersPage() {
       {error && (
         <div className="card card--panel" style={{ borderColor: "var(--c-error)", marginBottom: "var(--s4)" }}>
           <p className="t-sm t-error">{error}</p>
+          {needsProfile && (
+            <a className="btn btn--ghost btn--sm" href="/creator-studio/profile" style={{ marginTop: "var(--s2)" }}>
+              Go to Profile
+            </a>
+          )}
         </div>
       )}
 

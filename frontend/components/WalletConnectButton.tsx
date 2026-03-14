@@ -17,31 +17,20 @@ const readErrorMessage = (error: unknown): string => {
         : "";
 
   if (/invalid connect payload/i.test(rawMessage)) {
-    return "Wallet connection request was rejected by the extension payload format. Please reconnect, or choose a different wallet from the list.";
+    return "Wallet connection request was rejected. Please reconnect or choose a different wallet.";
   }
-
   if (/no response/i.test(rawMessage)) {
     return "Shield wallet did not respond. Reopen the Shield extension, disconnect this dApp, reconnect, and try again.";
   }
-
-  if (error instanceof Error && error.message.trim()) {
-    return error.message.trim();
-  }
-
-  if (typeof error === "string" && error.trim()) {
-    return error.trim();
-  }
-
+  if (error instanceof Error && error.message.trim()) return error.message.trim();
+  if (typeof error === "string" && error.trim()) return error.trim();
   if (error && typeof error === "object") {
     const record = error as Record<string, unknown>;
     for (const key of ["message", "error", "reason", "details"]) {
       const value = record[key];
-      if (typeof value === "string" && value.trim()) {
-        return value.trim();
-      }
+      if (typeof value === "string" && value.trim()) return value.trim();
     }
   }
-
   return "Wallet action failed. Please try again.";
 };
 
@@ -62,6 +51,31 @@ const readyStateLabel = (state: WalletReadyState): string => {
 
 const isShieldWalletName = (name: string): boolean => name.toLowerCase().includes("shield");
 
+/** Render a wallet icon - uses the adapter's built-in icon if available, else a letter fallback */
+function WalletIcon({ name, icon, size = 20 }: { name: string; icon?: string; size?: number }) {
+  if (icon) {
+    return (
+      <img
+        src={icon}
+        alt={name}
+        width={size}
+        height={size}
+        className="wallet-icon"
+        style={{ borderRadius: 4, flexShrink: 0 }}
+      />
+    );
+  }
+  // letter fallback
+  return (
+    <span
+      className="wallet-icon wallet-icon--fallback"
+      style={{ width: size, height: size, fontSize: size * 0.5 }}
+    >
+      {name.charAt(0).toUpperCase()}
+    </span>
+  );
+}
+
 export function WalletConnectButton() {
   const {
     wallets,
@@ -78,9 +92,7 @@ export function WalletConnectButton() {
   const rootRef = useRef<HTMLDivElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [pendingWalletName, setPendingWalletName] = useState<WalletName | null>(
-    null,
-  );
+  const [pendingWalletName, setPendingWalletName] = useState<WalletName | null>(null);
 
   const sortedWallets = useMemo(() => {
     const priority = (state: WalletReadyState): number => {
@@ -89,14 +101,10 @@ export function WalletConnectButton() {
       if (state === WalletReadyState.NOT_DETECTED) return 2;
       return 3;
     };
-
     return [...wallets].sort((a, b) => {
       const aShield = isShieldWalletName(a.adapter.name);
       const bShield = isShieldWalletName(b.adapter.name);
-      if (aShield !== bShield) {
-        return aShield ? -1 : 1;
-      }
-
+      if (aShield !== bShield) return aShield ? -1 : 1;
       const p = priority(a.readyState) - priority(b.readyState);
       if (p !== 0) return p;
       return a.adapter.name.localeCompare(b.adapter.name);
@@ -105,7 +113,6 @@ export function WalletConnectButton() {
 
   const handleConnect = useCallback(async () => {
     const selectedWalletName = wallet?.adapter.name as WalletName | undefined;
-
     try {
       setErrorMessage(null);
       await connect(Network.TESTNET);
@@ -115,10 +122,7 @@ export function WalletConnectButton() {
         for (let attempt = 0; attempt < 2; attempt += 1) {
           try {
             await disconnect().catch(() => undefined);
-            // Re-selecting helps when provider state was cleared by disconnect.
-            if (selectedWalletName) {
-              selectWallet(selectedWalletName);
-            }
+            if (selectedWalletName) selectWallet(selectedWalletName);
             await new Promise((resolve) => setTimeout(resolve, 140));
             await connect(Network.TESTNET);
             return;
@@ -126,11 +130,9 @@ export function WalletConnectButton() {
             retryError = innerError;
           }
         }
-
         setErrorMessage(readErrorMessage(retryError));
         return;
       }
-
       setErrorMessage(readErrorMessage(error));
     }
   }, [connect, disconnect, selectWallet, wallet]);
@@ -154,14 +156,32 @@ export function WalletConnectButton() {
       }
       return;
     }
-
     if (!wallet) {
       setMenuOpen((prev) => !prev);
       return;
     }
-
     await handleConnect();
   }, [connected, disconnect, wallet, handleConnect]);
+
+  // Auto-select Shield if installed
+  useEffect(() => {
+    if (wallet || connected || connecting || disconnecting) return;
+    const installedShield = wallets.find(
+      (entry) =>
+        isShieldWalletName(entry.adapter.name) &&
+        entry.readyState === WalletReadyState.INSTALLED,
+    );
+    if (!installedShield) return;
+    selectWallet(installedShield.adapter.name as WalletName);
+  }, [wallet, wallets, connected, connecting, disconnecting, selectWallet]);
+
+  // Auto-connect pending wallet
+  useEffect(() => {
+    if (!pendingWalletName) return;
+    if (!wallet || wallet.adapter.name !== pendingWalletName) return;
+    if (connected || connecting || disconnecting) return;
+    void handleConnect().finally(() => setPendingWalletName(null));
+  }, [pendingWalletName, wallet, connected, connecting, disconnecting, handleConnect]);
 
   useEffect(() => {
     if (!connected) return;
@@ -170,43 +190,13 @@ export function WalletConnectButton() {
     setPendingWalletName(null);
   }, [connected]);
 
-  useEffect(() => {
-    if (wallet || connected || connecting || disconnecting) return;
-
-    const installedShield = wallets.find(
-      (entry) =>
-        isShieldWalletName(entry.adapter.name) &&
-        entry.readyState === WalletReadyState.INSTALLED,
-    );
-    if (!installedShield) return;
-
-    selectWallet(installedShield.adapter.name as WalletName);
-  }, [wallet, wallets, connected, connecting, disconnecting, selectWallet]);
-
-  useEffect(() => {
-    if (!pendingWalletName) return;
-    if (!wallet || wallet.adapter.name !== pendingWalletName) return;
-    if (connected || connecting || disconnecting) return;
-
-    void handleConnect().finally(() => {
-      setPendingWalletName(null);
-    });
-  }, [
-    pendingWalletName,
-    wallet,
-    connected,
-    connecting,
-    disconnecting,
-    handleConnect,
-  ]);
-
+  // Close on outside click
   useEffect(() => {
     const onPointerDown = (event: MouseEvent | TouchEvent): void => {
       const node = rootRef.current;
       if (!node || node.contains(event.target as Node)) return;
       setMenuOpen(false);
     };
-
     document.addEventListener("mousedown", onPointerDown);
     document.addEventListener("touchstart", onPointerDown);
     return () => {
@@ -215,32 +205,43 @@ export function WalletConnectButton() {
     };
   }, []);
 
-  const buttonLabel = useMemo(() => {
-    if (disconnecting) return "Disconnecting...";
-    if (connecting) return "Connecting...";
-    if (connected) return "Disconnect Wallet";
-    return "Connect Wallet";
-  }, [connected, connecting, disconnecting]);
+  const selectedIcon = wallet?.adapter.icon as string | undefined;
+  const selectedName = wallet?.adapter.name;
 
   return (
-    <div className="wallet-button-wrapper wallet-connect" ref={rootRef}>
+    <div className="wallet-connect" ref={rootRef}>
+
+      {/* -- Main trigger button -- */}
       <button
         type="button"
-        className="btn btn--primary wallet-connect__trigger"
-        onClick={() => {
-          void handleMainClick();
-        }}
+        className={`wallet-connect__trigger btn btn--primary${connected ? " wallet-connect__trigger--connected" : ""}`}
+        onClick={() => { void handleMainClick(); }}
         disabled={connecting || disconnecting}
       >
-        {buttonLabel}
+        {/* Show selected wallet icon when one is chosen but not yet connected */}
+        {!connected && selectedIcon && (
+          <WalletIcon name={selectedName ?? ""} icon={selectedIcon} size={18} />
+        )}
+        <span>
+          {disconnecting
+            ? "Disconnecting..."
+            : connecting
+              ? "Connecting..."
+              : connected
+                ? "Disconnect Wallet"
+                : selectedName
+                  ? `Connect ${selectedName}`
+                  : "Connect Wallet"}
+        </span>
+        {/* Chevron to open picker when no wallet yet selected */}
+        {!connected && !wallet && (
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ marginLeft: 4 }}>
+            <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        )}
       </button>
 
-      {!connected && wallet && (
-        <p className="wallet-connect__selected">
-          Selected: {wallet.adapter.name}
-        </p>
-      )}
-
+      {/* -- "Choose a different wallet" inline link (compact, no extra column height) -- */}
       {!connected && wallet && (
         <button
           type="button"
@@ -248,32 +249,42 @@ export function WalletConnectButton() {
           onClick={() => setMenuOpen((prev) => !prev)}
           disabled={connecting || disconnecting}
         >
-          Choose a different wallet
+          <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+            <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          Change wallet
         </button>
       )}
 
+      {/* -- Connected address pill -- */}
+      {connected && address && (
+        <p className="wallet-connect__address">{shortenAddress(address)}</p>
+      )}
+
+      {/* -- Wallet picker dropdown -- */}
       {menuOpen && !connected && (
         <div className="wallet-connect__menu card card--panel">
           <p className="wallet-connect__menu-title">Select Wallet</p>
           <div className="wallet-connect__menu-list">
             {sortedWallets.map((entry) => {
               const selected = wallet?.adapter.name === entry.adapter.name;
-              const pending =
-                pendingWalletName === entry.adapter.name && !connected;
+              const pending = pendingWalletName === entry.adapter.name && !connected;
+              const icon = entry.adapter.icon as string | undefined;
               return (
                 <button
                   key={entry.adapter.name}
                   type="button"
-                  className={`wallet-connect__menu-item${
-                    selected ? " wallet-connect__menu-item--active" : ""
-                  }`}
-                  onClick={() =>
-                    handleSelectWallet(entry.adapter.name as WalletName)
-                  }
+                  className={`wallet-connect__menu-item${selected ? " wallet-connect__menu-item--active" : ""}`}
+                  onClick={() => handleSelectWallet(entry.adapter.name as WalletName)}
                   disabled={connecting || disconnecting}
                 >
-                  <span>{entry.adapter.name}</span>
-                  <span className="wallet-connect__menu-state">
+                  {/* Wallet icon + name */}
+                  <span className="wallet-connect__menu-identity">
+                    <WalletIcon name={entry.adapter.name} icon={icon} size={22} />
+                    <span className="wallet-connect__menu-name">{entry.adapter.name}</span>
+                  </span>
+                  {/* State badge */}
+                  <span className={`wallet-connect__menu-state${entry.readyState === WalletReadyState.INSTALLED ? " wallet-connect__menu-state--installed" : ""}`}>
                     {pending ? "Connecting..." : readyStateLabel(entry.readyState)}
                   </span>
                 </button>
@@ -283,9 +294,6 @@ export function WalletConnectButton() {
         </div>
       )}
 
-      {connected && address && (
-        <p className="wallet-connect__address">{shortenAddress(address)}</p>
-      )}
       {errorMessage && <p className="wallet-connect__error">{errorMessage}</p>}
     </div>
   );

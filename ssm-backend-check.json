@@ -1,0 +1,11 @@
+{
+    "Parameters":  {
+                       "commands":  [
+                                        "sudo bash -lc \u0027set -e; cd /opt/innercircle/backend; grep -n \"Creators cannot tip themselves\" src/controllers/tips.controller.ts; grep -n \"cleanupStaleStreamKeys\" src/services/ivsService.ts; test -f prisma/migrations/20260314000000_add_tip_tx_id/migration.sql \u0026\u0026 echo migration_ok; systemctl is-active innercircle-backend\u0027"
+                                    ]
+                   },
+    "DocumentName":  "AWS-RunShellScript",
+    "InstanceIds":  [
+                        "i-0fe6ec9522ee91cef"
+                    ]
+}

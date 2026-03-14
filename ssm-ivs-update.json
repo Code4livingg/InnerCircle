@@ -1,0 +1,11 @@
+{
+    "Parameters":  {
+                       "commands":  [
+                                        "sudo bash -lc \u0027set -e\ncd /opt/innercircle/backend\nif grep -q ^IVS_REGION= .env; then sed -i \"s|^IVS_REGION=.*|IVS_REGION=ap-south-1|\" .env; else echo \"IVS_REGION=ap-south-1\" \u003e\u003e .env; fi\nif grep -q ^IVS_CHANNEL_ARN= .env; then sed -i \"s|^IVS_CHANNEL_ARN=.*|IVS_CHANNEL_ARN=arn:aws:ivs:ap-south-1:203433203309:channel/0hRn3GvF42Q1|\" .env; else echo \"IVS_CHANNEL_ARN=arn:aws:ivs:ap-south-1:203433203309:channel/0hRn3GvF42Q1\" \u003e\u003e .env; fi\nif grep -q ^IVS_INGEST_ENDPOINT= .env; then sed -i \"s|^IVS_INGEST_ENDPOINT=.*|IVS_INGEST_ENDPOINT=418d1168fcd1.global-contribute.live-video.net|\" .env; else echo \"IVS_INGEST_ENDPOINT=418d1168fcd1.global-contribute.live-video.net\" \u003e\u003e .env; fi\nif grep -q ^IVS_PLAYBACK_URL= .env; then sed -i \"s|^IVS_PLAYBACK_URL=.*|IVS_PLAYBACK_URL=https://418d1168fcd1.ap-south-1.playback.live-video.net/api/video/v1/ap-south-1.203433203309.channel.0hRn3GvF42Q1.m3u8|\" .env; else echo \"IVS_PLAYBACK_URL=https://418d1168fcd1.ap-south-1.playback.live-video.net/api/video/v1/ap-south-1.203433203309.channel.0hRn3GvF42Q1.m3u8\" \u003e\u003e .env; fi\nif grep -q ^IVS_STREAM_KEY_ARN= .env; then sed -i \"s|^IVS_STREAM_KEY_ARN=.*|IVS_STREAM_KEY_ARN=arn:aws:ivs:ap-south-1:203433203309:stream-key/9wQg6wAyWzal|\" .env; else echo \"IVS_STREAM_KEY_ARN=arn:aws:ivs:ap-south-1:203433203309:stream-key/9wQg6wAyWzal\" \u003e\u003e .env; fi\nif grep -q ^IVS_STREAM_KEY_VALUE= .env; then sed -i \"s|^IVS_STREAM_KEY_VALUE=.*|IVS_STREAM_KEY_VALUE=sk_ap-south-1_9wQg6wAyWzal_tS3ZVi8HQVcDxnR2FHOpob6PHuVSoS|\" .env; else echo \"IVS_STREAM_KEY_VALUE=sk_ap-south-1_9wQg6wAyWzal_tS3ZVi8HQVcDxnR2FHOpob6PHuVSoS\" \u003e\u003e .env; fi\nsudo systemctl restart innercircle-backend\u0027"
+                                    ]
+                   },
+    "DocumentName":  "AWS-RunShellScript",
+    "InstanceIds":  [
+                        "i-0fe6ec9522ee91cef"
+                    ]
+}

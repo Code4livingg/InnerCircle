@@ -4,7 +4,10 @@ import {
   DeleteChannelCommand,
   DeletePlaybackKeyPairCommand,
   DeleteStreamKeyCommand,
+  GetStreamKeyCommand,
   ImportPlaybackKeyPairCommand,
+  ListChannelsCommand,
+  ListStreamKeysCommand,
   StopStreamCommand,
 } from "@aws-sdk/client-ivs";
 import { createCipheriv, createDecipheriv, generateKeyPairSync, randomBytes } from "node:crypto";
@@ -17,6 +20,12 @@ import { ivsClient } from "./aws/ivsClient.js";
 
 const STATUS_LIVE = "live";
 const STATUS_OFFLINE = "offline";
+const STREAM_KEY_QUOTA_PATTERN = /stream-key quota exceeded/i;
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
 const masterKey = (): Buffer => {
   const key = b64ToBuffer(env.masterKeyBase64);
@@ -91,6 +100,117 @@ const cleanupAwsResources = async ({
   ]);
 };
 
+const deleteStreamKeysForChannel = async (channelArn: string): Promise<void> => {
+  let streamKeyToken: string | undefined;
+  do {
+    const keysResponse = await ivsClient.send(
+      new ListStreamKeysCommand({ channelArn, maxResults: 50, nextToken: streamKeyToken }),
+    );
+    streamKeyToken = keysResponse.nextToken;
+
+    for (const streamKey of keysResponse.streamKeys ?? []) {
+      if (!streamKey.arn) {
+        continue;
+      }
+      try {
+        await ivsClient.send(new DeleteStreamKeyCommand({ arn: streamKey.arn }));
+      } catch (error) {
+        console.warn("IVS: failed to delete stream key", {
+          streamKeyArn: streamKey.arn,
+          error: (error as Error).message,
+        });
+      }
+    }
+  } while (streamKeyToken);
+};
+
+const fetchExistingStreamKey = async (
+  channelArn: string,
+): Promise<{ streamKeyArn: string; streamKeyValue: string } | null> => {
+  let streamKeyToken: string | undefined;
+  do {
+    const keysResponse = await ivsClient.send(
+      new ListStreamKeysCommand({ channelArn, maxResults: 50, nextToken: streamKeyToken }),
+    );
+    streamKeyToken = keysResponse.nextToken;
+
+    for (const streamKey of keysResponse.streamKeys ?? []) {
+      if (!streamKey.arn) {
+        continue;
+      }
+      const detail = await ivsClient.send(new GetStreamKeyCommand({ arn: streamKey.arn }));
+      const value = detail.streamKey?.value;
+      if (!value) {
+        continue;
+      }
+      return { streamKeyArn: streamKey.arn, streamKeyValue: value };
+    }
+  } while (streamKeyToken);
+
+  return null;
+};
+
+const ensureStreamKeyForChannel = async (
+  channelArn: string,
+): Promise<{ streamKeyArn: string; streamKeyValue: string }> => {
+  await deleteStreamKeysForChannel(channelArn);
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const streamKeyResponse = await ivsClient.send(new CreateStreamKeyCommand({ channelArn }));
+      const streamKeyArn = streamKeyResponse.streamKey?.arn;
+      const streamKeyValue = streamKeyResponse.streamKey?.value;
+      if (!streamKeyArn || !streamKeyValue) {
+        throw new Error("IVS did not return a stream key.");
+      }
+      return { streamKeyArn, streamKeyValue };
+    } catch (error) {
+      lastError = error;
+      const message = (error as Error).message ?? "";
+      if (STREAM_KEY_QUOTA_PATTERN.test(message)) {
+        console.warn("IVS: stream key quota exceeded after delete; retrying", { attempt, message });
+        await sleep(400 * attempt);
+        continue;
+      }
+      break;
+    }
+  }
+
+  const existing = await fetchExistingStreamKey(channelArn);
+  if (existing) {
+    return existing;
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Failed to create IVS stream key.");
+};
+
+const cleanupStaleStreamKeys = async (): Promise<void> => {
+  const activeChannels = await prisma.liveStream.findMany({
+    where: { status: STATUS_LIVE },
+    select: { ivsChannelArn: true },
+  });
+  const activeChannelArns = new Set(activeChannels.map((stream) => stream.ivsChannelArn));
+  if (env.ivsChannelArn) {
+    activeChannelArns.add(env.ivsChannelArn);
+  }
+
+  let nextToken: string | undefined;
+  do {
+    const channelsResponse = await ivsClient.send(new ListChannelsCommand({ maxResults: 50, nextToken }));
+    nextToken = channelsResponse.nextToken;
+
+    for (const channel of channelsResponse.channels ?? []) {
+      const channelArn = channel.arn;
+      if (!channelArn || activeChannelArns.has(channelArn)) {
+        continue;
+      }
+
+      await deleteStreamKeysForChannel(channelArn);
+    }
+  } while (nextToken);
+};
+
 export interface CreateIvsChannelInput {
   creatorId: string;
   title: string;
@@ -134,6 +254,41 @@ export const createIvsChannel = async ({
     throw new Error("This creator already has an active live stream.");
   }
 
+  await cleanupStaleStreamKeys();
+
+  const previousLiveStream = await prisma.liveStream.findFirst({
+    where: { creatorId },
+    orderBy: { createdAt: "desc" },
+    select: {
+      status: true,
+      ivsChannelArn: true,
+      streamKeyArn: true,
+      playbackKeyPairArn: true,
+    },
+  });
+
+  if (previousLiveStream && previousLiveStream.status !== STATUS_LIVE) {
+    console.log("IVS: cleaning up previous stream key before creating a new one", {
+      streamKeyArn: previousLiveStream.streamKeyArn,
+    });
+    const shouldDeletePreviousChannel =
+      !!previousLiveStream.ivsChannelArn && previousLiveStream.ivsChannelArn !== env.ivsChannelArn;
+    await cleanupAwsResources({
+      playbackKeyPairArn: previousLiveStream.playbackKeyPairArn ?? undefined,
+      streamKeyArn: previousLiveStream.streamKeyArn ?? undefined,
+      channelArn: shouldDeletePreviousChannel ? previousLiveStream.ivsChannelArn ?? undefined : undefined,
+    });
+  }
+
+  const staticChannel =
+    env.ivsChannelArn && env.ivsIngestEndpoint && env.ivsPlaybackUrl
+      ? {
+        channelArn: env.ivsChannelArn,
+        ingestEndpoint: env.ivsIngestEndpoint,
+        playbackUrl: env.ivsPlaybackUrl,
+      }
+      : null;
+
   const channelName = sanitizeName(`${creator.handle}-${title}-${Date.now()}`);
   const { privateKey, publicKey } = generateKeyPairSync("ec", {
     namedCurve: "secp384r1",
@@ -144,38 +299,41 @@ export const createIvsChannel = async ({
   let channelArn: string | undefined;
   let streamKeyArn: string | undefined;
   let playbackKeyPairArn: string | undefined;
+  let ingestEndpoint: string | undefined;
+  let playbackUrl: string | undefined;
+  let streamKeyValue: string | undefined;
+  const shouldDeleteChannelOnError = !staticChannel;
 
   try {
-    const createChannelResponse = await ivsClient.send(
-      new CreateChannelCommand({
-        authorized: true,
-        latencyMode: "LOW",
-        name: channelName,
-        type: "STANDARD",
-      }),
-    );
+    if (staticChannel) {
+      channelArn = staticChannel.channelArn;
+      ingestEndpoint = staticChannel.ingestEndpoint;
+      playbackUrl = staticChannel.playbackUrl;
+      console.log("IVS: using existing channel", { channelArn, ingestEndpoint, playbackUrl });
+    } else {
+      const createChannelResponse = await ivsClient.send(
+        new CreateChannelCommand({
+          authorized: true,
+          latencyMode: "LOW",
+          name: channelName,
+          type: "STANDARD",
+        }),
+      );
 
-    channelArn = createChannelResponse.channel?.arn;
-    const ingestEndpoint = createChannelResponse.channel?.ingestEndpoint;
-    const playbackUrl = createChannelResponse.channel?.playbackUrl;
-    console.log("IVS: channel created", { channelArn, ingestEndpoint, playbackUrl });
+      channelArn = createChannelResponse.channel?.arn;
+      ingestEndpoint = createChannelResponse.channel?.ingestEndpoint;
+      playbackUrl = createChannelResponse.channel?.playbackUrl;
+      console.log("IVS: channel created", { channelArn, ingestEndpoint, playbackUrl });
+    }
 
     if (!channelArn || !ingestEndpoint || !playbackUrl) {
       throw new Error("IVS channel creation returned incomplete channel details.");
     }
 
-    const streamKeyResponse = await ivsClient.send(
-      new CreateStreamKeyCommand({
-        channelArn,
-      }),
-    );
-
-    streamKeyArn = streamKeyResponse.streamKey?.arn;
-    const streamKeyValue = streamKeyResponse.streamKey?.value;
-    console.log("IVS: stream key created", { streamKeyArn });
-    if (!streamKeyArn || !streamKeyValue) {
-      throw new Error("IVS did not return a stream key.");
-    }
+    const streamKey = await ensureStreamKeyForChannel(channelArn);
+    streamKeyArn = streamKey.streamKeyArn;
+    streamKeyValue = streamKey.streamKeyValue;
+    console.log("IVS: stream key ready", { streamKeyArn });
 
     const playbackKeyResponse = await ivsClient.send(
       new ImportPlaybackKeyPairCommand({
@@ -196,7 +354,7 @@ export const createIvsChannel = async ({
       data: {
         creatorId,
         ivsChannelArn: channelArn,
-        ivsChannelName: channelName,
+        ivsChannelName: staticChannel ? channelName : channelName,
         streamKeyArn,
         streamKeyValue,
         ingestEndpoint,
@@ -229,7 +387,11 @@ export const createIvsChannel = async ({
     };
   } catch (error) {
     console.error("IVS CreateChannel error", error);
-    await cleanupAwsResources({ playbackKeyPairArn, streamKeyArn, channelArn });
+    await cleanupAwsResources({
+      playbackKeyPairArn,
+      streamKeyArn,
+      channelArn: shouldDeleteChannelOnError ? channelArn : undefined,
+    });
     throw new Error((error as Error).message || "Failed to create IVS channel");
   }
 };

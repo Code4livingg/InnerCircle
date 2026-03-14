@@ -55,6 +55,21 @@ export interface AccessPassPaymentInput {
   expectedRecipientAddress?: string;
 }
 
+export interface TipProofInput {
+  creatorFieldId: string;
+  creatorAddress: string;
+  amountMicrocredits: bigint;
+  txId?: string;
+}
+
+export interface TipPaymentInput {
+  creatorFieldId: string;
+  purchaseTxId?: string;
+  walletAddressHint?: string;
+  expectedPriceMicrocredits: bigint;
+  expectedRecipientAddress: string;
+}
+
 const toFieldLiteral = (value: string): string => (value.endsWith("field") ? value : `${value}field`);
 const toU64Literal = (value: bigint): string => `${value}u64`;
 
@@ -458,6 +473,68 @@ export const verifyAccessPassPayment = async (
   return {
     walletHash: walletHash(resolveWalletAddress(address)),
     resourceFieldId: input.contentFieldId,
+    provedByTxId: input.purchaseTxId,
+  };
+};
+
+export const verifyTipProof = async (
+  input: TipProofInput,
+): Promise<VerifiedOwnership> => {
+  if (env.proofVerificationMode === "mock") {
+    return {
+      walletHash: subjectHash(`${env.tipProgramId}:tip_private:${input.txId ?? input.creatorFieldId}`),
+      resourceFieldId: input.creatorFieldId,
+      provedByTxId: input.txId,
+    };
+  }
+
+  if (!input.txId) {
+    throw new Error("Missing txId. Expected an on-chain execute tx calling tip_private.");
+  }
+
+  const tx = await fetchExplorerTx(input.txId);
+  const transition = findTransition(tx, env.tipProgramId, "tip_private");
+  if (!transition) {
+    throw new Error("tip_private transition not found in transaction");
+  }
+
+  if (!txAppearsAccepted(tx)) {
+    throw new Error(`Transaction ${input.txId} is not accepted yet`);
+  }
+
+  const publicInputs = publicInputsFromTransition(transition);
+  assertIncludesLiteral(publicInputs, toFieldLiteral(input.creatorFieldId), "tip_private public creatorId");
+  assertIncludesLiteral(publicInputs, input.creatorAddress, "tip_private public creatorAddress");
+  assertIncludesLiteral(publicInputs, toU64Literal(input.amountMicrocredits), "tip_private public amount");
+
+  return {
+    walletHash: subjectHash(`${env.tipProgramId}:tip_private:${input.txId}`),
+    resourceFieldId: input.creatorFieldId,
+    provedByTxId: input.txId,
+  };
+};
+
+export const verifyTipPayment = async (
+  input: TipPaymentInput,
+): Promise<VerifiedOwnership> => {
+  if (env.proofVerificationMode === "mock") {
+    return verifyMockOnly(input.creatorFieldId, input.walletAddressHint);
+  }
+
+  if (!input.purchaseTxId) {
+    throw new Error("Missing purchaseTxId. Expected an on-chain credits.aleo transfer_public.");
+  }
+
+  const verified = await verifyDirectCreditsTransfer({
+    txId: input.purchaseTxId,
+    expectedRecipientAddress: input.expectedRecipientAddress,
+    expectedPriceMicrocredits: input.expectedPriceMicrocredits,
+    walletAddressHint: input.walletAddressHint,
+  });
+
+  return {
+    walletHash: verified.walletHash,
+    resourceFieldId: input.creatorFieldId,
     provedByTxId: input.purchaseTxId,
   };
 };

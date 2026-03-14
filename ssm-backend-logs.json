@@ -1,0 +1,11 @@
+{
+    "Parameters":  {
+                       "commands":  [
+                                        "sudo bash -lc \u0027cd /opt/innercircle/backend; echo \"---db_generate---\"; tail -n 30 /tmp/db_generate.log | tr -cd \"\\11\\12\\15\\40-\\176\"; echo \"\\n---migrate---\"; tail -n 30 /tmp/migrate.log | tr -cd \"\\11\\12\\15\\40-\\176\"; echo \"\\n---build---\"; tail -n 30 /tmp/build.log | tr -cd \"\\11\\12\\15\\40-\\176\"\u0027"
+                                    ]
+                   },
+    "DocumentName":  "AWS-RunShellScript",
+    "InstanceIds":  [
+                        "i-0fe6ec9522ee91cef"
+                    ]
+}

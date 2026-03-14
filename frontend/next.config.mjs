@@ -1,9 +1,14 @@
 /** @type {import('next').NextConfig} */
-const apiProxyBase = (
+const normalizeApiBase = (value) => {
+  const trimmed = value.replace(/\/$/, "");
+  return trimmed.endsWith("/api") ? trimmed.slice(0, -4) : trimmed;
+};
+
+const apiProxyBase = normalizeApiBase(
   process.env.API_PROXY_BASE ??
-  process.env.NEXT_PUBLIC_API_BASE ??
-  "http://localhost:8080"
-).replace(/\/$/, "");
+    process.env.NEXT_PUBLIC_API_BASE ??
+    "http://localhost:8080",
+);
 
 const nextConfig = {
   reactStrictMode: true,

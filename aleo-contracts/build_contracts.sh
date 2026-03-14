@@ -20,3 +20,10 @@ cd "$SCRIPT_DIR/access_pass"
 rm -rf build
 leo build 2>&1
 echo "Access pass EXIT: $?"
+
+echo ""
+echo "=== Cleaning and rebuilding tip ==="
+cd "$SCRIPT_DIR/tip"
+rm -rf build
+leo build 2>&1
+echo "Tip EXIT: $?"

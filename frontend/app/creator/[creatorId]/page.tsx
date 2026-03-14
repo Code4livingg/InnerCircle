@@ -6,6 +6,7 @@ import { useWallet } from "@/lib/walletContext";
 import { Network } from "@provablehq/aleo-types";
 import {
   ApiError,
+  createAnonymousTip,
   createTip,
   fetchCreatorByHandle,
   fetchSubscriptionStatus,
@@ -20,6 +21,7 @@ import { getWalletRole, type AppRole } from "../../../lib/walletRole";
 import { getWalletSessionToken } from "../../../lib/walletSession";
 import {
   executeCreditsTransfer,
+  executeAnonymousTip,
   type FeePreference,
   waitForOnChainTransactionId,
 } from "../../../lib/aleoTransactions";
@@ -32,6 +34,7 @@ interface CreatorPageProps {
 type SubscribeState = "idle" | "wallet" | "verifying" | "success";
 
 const CREDITS_PROGRAM_ID = "credits.aleo";
+const TIP_PROGRAM_ID = process.env.NEXT_PUBLIC_TIP_PROGRAM_ID?.trim() || "tip_pay_v1_xwnxp.aleo";
 
 const wait = (ms: number): Promise<void> =>
   new Promise((resolve) => {
@@ -398,17 +401,74 @@ export default function CreatorPage({ params }: CreatorPageProps) {
 
     try {
       setTipLoading(true);
-      const token = await getWalletSessionToken(wallet);
-      await createTip(
-        {
-          creatorHandle: creator.handle,
+
+      if (tipAnonymous) {
+        if (!creator.walletAddress) {
+          throw new Error("Creator wallet address is missing. The creator must update their profile first.");
+        }
+
+        const requestTxId = await executeAnonymousTip({
+          wallet,
+          creatorFieldId: creator.creatorFieldId,
+          creatorAddress: creator.walletAddress,
           amountMicrocredits: microcredits,
-          message: tipMessage || undefined,
-          isAnonymous: tipAnonymous,
-        },
-        token,
-      );
-      setTipSuccess("Tip sent successfully.");
+        });
+
+        const chainTxId = await waitForOnChainTransactionId(wallet, requestTxId, TIP_PROGRAM_ID, {
+          attempts: 60,
+          delayMs: 2000,
+        });
+
+        await runWithPendingRetry(() =>
+          createAnonymousTip({
+            creatorHandle: creator.handle,
+            amountMicrocredits: microcredits,
+            message: tipMessage || undefined,
+            txId: chainTxId,
+          }),
+        );
+
+        setTipSuccess("Anonymous tip sent successfully.");
+      } else {
+        if (!creator.walletAddress) {
+          throw new Error("Creator wallet address is missing. The creator must update their profile first.");
+        }
+
+        let walletToken: string | undefined;
+        try {
+          walletToken = await getWalletSessionToken(wallet);
+        } catch (error) {
+          const message = (error as Error).message ?? "";
+          if (!/message signing/i.test(message)) {
+            throw error;
+          }
+        }
+        const requestTxId = await executeCreditsTransfer({
+          wallet,
+          recipientAddress: creator.walletAddress,
+          amountMicrocredits: microcredits,
+        });
+
+        const chainTxId = await waitForOnChainTransactionId(wallet, requestTxId, CREDITS_PROGRAM_ID, {
+          attempts: 60,
+          delayMs: 2000,
+        });
+
+        await runWithPendingRetry(() =>
+          createTip(
+            {
+              creatorHandle: creator.handle,
+              amountMicrocredits: microcredits,
+              message: tipMessage || undefined,
+              txId: chainTxId,
+            },
+            walletToken,
+          ),
+        );
+
+        setTipSuccess("Tip sent successfully.");
+      }
+
       setTipAmount("");
       setTipMessage("");
       const data = await fetchTipLeaderboard(creator.handle);

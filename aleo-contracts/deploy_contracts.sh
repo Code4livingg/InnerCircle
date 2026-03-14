@@ -52,4 +52,16 @@ leo deploy \
 echo "Access pass deploy complete"
 
 echo ""
-echo "=== Both contracts deployed successfully! ==="
+echo "=== Deploying tip_pay_v1_xwnxp.aleo ==="
+cd "$SCRIPT_DIR/tip"
+leo deploy \
+  --network "$NETWORK" \
+  --endpoint "$ENDPOINT" \
+  --private-key "$PRIVATE_KEY" \
+  --priority-fees "$PRIORITY_FEES" \
+  --broadcast \
+  --yes
+echo "Tip deploy complete"
+
+echo ""
+echo "=== All contracts deployed successfully! ==="

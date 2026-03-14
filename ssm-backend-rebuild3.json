@@ -1,0 +1,11 @@
+{
+    "Parameters":  {
+                       "commands":  [
+                                        "sudo bash -lc \u0027set -e; cd /opt/innercircle/backend; export LANG=C.UTF-8; export LC_ALL=C.UTF-8; export CI=1; export NO_COLOR=1; npm run build \u003e /tmp/build.log 2\u003e\u00261; sudo systemctl restart innercircle-backend; tail -n 20 /tmp/build.log | tr -cd \"\\11\\12\\15\\40-\\176\"\u0027"
+                                    ]
+                   },
+    "DocumentName":  "AWS-RunShellScript",
+    "InstanceIds":  [
+                        "i-0fe6ec9522ee91cef"
+                    ]
+}

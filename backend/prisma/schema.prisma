@@ -217,6 +217,7 @@ model SubscriptionTier {
 
 model Tip {
   id                 String   @id @default(uuid()) @db.Uuid
+  txId               String?  @unique
   creatorId          String   @db.Uuid
   creator            Creator  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
   walletHash         String

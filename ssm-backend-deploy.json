@@ -1,0 +1,11 @@
+{
+    "Parameters":  {
+                       "commands":  [
+                                        "sudo bash -lc \u0027set -e\ncd /opt/innercircle\nrm -rf backend-update5\nmkdir backend-update5\ncd backend-update5\ntar -xzf ../backend-update4.tar.gz\ncd backend\nnpm install\nnpm run build\nsudo systemctl restart innercircle-backend\u0027"
+                                    ]
+                   },
+    "DocumentName":  "AWS-RunShellScript",
+    "InstanceIds":  [
+                        "i-0fe6ec9522ee91cef"
+                    ]
+}

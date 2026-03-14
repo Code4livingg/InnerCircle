@@ -1,0 +1,11 @@
+{
+    "Parameters":  {
+                       "commands":  [
+                                        "sudo bash -lc \u0027set -e; cd /opt/innercircle/backend; export LANG=C.UTF-8; export LC_ALL=C.UTF-8; export CI=1; export NO_COLOR=1; export PRISMA_HIDE_UPDATE_MESSAGE=1; npm run db:generate; npx prisma migrate deploy --schema prisma/schema.prisma; npm run build; sudo systemctl restart innercircle-backend\u0027"
+                                    ]
+                   },
+    "DocumentName":  "AWS-RunShellScript",
+    "InstanceIds":  [
+                        "i-0fe6ec9522ee91cef"
+                    ]
+}
