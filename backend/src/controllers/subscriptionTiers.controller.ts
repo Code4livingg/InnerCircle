@@ -5,6 +5,8 @@ import type { WalletSessionRequest } from "../middleware/requireWalletSession.js
 import { ensureWalletRoleByHash } from "../services/walletRoleService.js";
 import { DB_UNAVAILABLE_CODE, DB_UNAVAILABLE_MESSAGE, isDatabaseUnavailableError } from "../utils/dbErrors.js";
 
+type WalletSession = NonNullable<WalletSessionRequest["walletSession"]>;
+
 const tierSchema = z.object({
   tierName: z.string().min(2).max(60),
   priceMicrocredits: z.coerce.bigint().nonnegative(),
@@ -37,6 +39,58 @@ const serializeTier = (tier: {
   createdAt: tier.createdAt.toISOString(),
   updatedAt: tier.updatedAt.toISOString(),
 });
+
+const normalizeWalletAddress = (walletAddress?: string | null): string =>
+  walletAddress?.trim().toLowerCase() ?? "";
+
+const findCreatorForSession = async (session: WalletSession): Promise<{
+  id: string;
+  walletHash: string;
+  walletAddress: string;
+} | null> => {
+  const creatorByHash = await prisma.creator.findUnique({
+    where: { walletHash: session.wh },
+    select: { id: true, walletHash: true, walletAddress: true },
+  });
+  if (creatorByHash) {
+    return creatorByHash;
+  }
+
+  const address = normalizeWalletAddress(session.addr);
+  if (!address) {
+    return null;
+  }
+
+  const creatorByAddress = await prisma.creator.findFirst({
+    where: { walletAddress: { equals: address, mode: "insensitive" } },
+    select: { id: true, walletHash: true, walletAddress: true },
+  });
+  if (!creatorByAddress) {
+    return null;
+  }
+
+  try {
+    const updated = await prisma.creator.update({
+      where: { id: creatorByAddress.id },
+      data: {
+        walletHash: session.wh,
+        walletAddress: session.addr,
+      },
+      select: { id: true, walletHash: true, walletAddress: true },
+    });
+    return updated;
+  } catch {
+    return creatorByAddress;
+  }
+};
+
+const isSessionOwner = (creator: { walletHash: string; walletAddress: string }, session: WalletSession): boolean => {
+  if (creator.walletHash === session.wh) {
+    return true;
+  }
+  const address = normalizeWalletAddress(session.addr);
+  return address.length > 0 && normalizeWalletAddress(creator.walletAddress) === address;
+};
 
 const syncCreatorPricing = async (creatorId: string): Promise<void> => {
   const minPrice = await prisma.subscriptionTier.aggregate({
@@ -86,10 +140,7 @@ export const listMySubscriptionTiers = async (req: WalletSessionRequest, res: Re
       return;
     }
 
-    const creator = await prisma.creator.findUnique({
-      where: { walletHash: session.wh },
-      select: { id: true },
-    });
+    const creator = await findCreatorForSession(session);
 
     if (!creator) {
       res.status(404).json({ error: "Creator not found" });
@@ -122,10 +173,7 @@ export const createSubscriptionTier = async (req: WalletSessionRequest, res: Res
     const payload = tierSchema.parse(req.body);
     await ensureWalletRoleByHash(session.wh, "CREATOR");
 
-    const creator = await prisma.creator.findUnique({
-      where: { walletHash: session.wh },
-      select: { id: true },
-    });
+    const creator = await findCreatorForSession(session);
 
     if (!creator) {
       res.status(404).json({ error: "Creator not found" });
@@ -171,7 +219,7 @@ export const updateSubscriptionTier = async (req: WalletSessionRequest, res: Res
 
     const tier = await prisma.subscriptionTier.findUnique({
       where: { id: tierId },
-      select: { id: true, creatorId: true, creator: { select: { walletHash: true } } },
+      select: { id: true, creatorId: true, creator: { select: { walletHash: true, walletAddress: true } } },
     });
 
     if (!tier) {
@@ -179,7 +227,7 @@ export const updateSubscriptionTier = async (req: WalletSessionRequest, res: Res
       return;
     }
 
-    if (tier.creator.walletHash !== session.wh) {
+    if (!isSessionOwner(tier.creator, session)) {
       res.status(403).json({ error: "Not authorized to update this tier" });
       return;
     }
@@ -222,7 +270,7 @@ export const deleteSubscriptionTier = async (req: WalletSessionRequest, res: Res
 
     const tier = await prisma.subscriptionTier.findUnique({
       where: { id: tierId },
-      select: { id: true, creatorId: true, creator: { select: { walletHash: true } } },
+      select: { id: true, creatorId: true, creator: { select: { walletHash: true, walletAddress: true } } },
     });
 
     if (!tier) {
@@ -230,7 +278,7 @@ export const deleteSubscriptionTier = async (req: WalletSessionRequest, res: Res
       return;
     }
 
-    if (tier.creator.walletHash !== session.wh) {
+    if (!isSessionOwner(tier.creator, session)) {
       res.status(403).json({ error: "Not authorized to delete this tier" });
       return;
     }

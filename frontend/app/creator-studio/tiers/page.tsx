@@ -46,6 +46,8 @@ export default function CreatorTiersPage() {
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [needsProfile, setNeedsProfile] = useState(false);
+  const isCreatorMissing = (err: unknown): boolean =>
+    err instanceof ApiError && err.status === 404 && /creator/i.test(err.message);
 
   const [newTier, setNewTier] = useState<TierDraft>({
     tierName: "",
@@ -82,7 +84,7 @@ export default function CreatorTiersPage() {
       setTiers(data.tiers);
       hydrateDrafts(data.tiers);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 404) {
+      if (isCreatorMissing(err)) {
         setNeedsProfile(true);
         setTiers([]);
         setDrafts({});
@@ -110,13 +112,10 @@ export default function CreatorTiersPage() {
   };
 
   const handleCreate = async () => {
-    if (needsProfile) {
-      setError("Save your creator profile first to create tiers.");
-      return;
-    }
     try {
       setSaving("new");
       setError(null);
+      setNeedsProfile(false);
       const token = await getWalletSessionToken(wallet);
       await createSubscriptionTier(
         {
@@ -130,22 +129,24 @@ export default function CreatorTiersPage() {
       setNewTier({ tierName: "", price: "", description: "", benefits: "" });
       await loadTiers();
     } catch (err) {
-      setError((err as Error).message || "Failed to create tier.");
+      if (isCreatorMissing(err)) {
+        setNeedsProfile(true);
+        setError("Save your creator profile first to create tiers.");
+      } else {
+        setError((err as Error).message || "Failed to create tier.");
+      }
     } finally {
       setSaving(null);
     }
   };
 
   const handleSave = async (tierId: string) => {
-    if (needsProfile) {
-      setError("Save your creator profile first to edit tiers.");
-      return;
-    }
     const draft = drafts[tierId];
     if (!draft) return;
     try {
       setSaving(tierId);
       setError(null);
+      setNeedsProfile(false);
       const token = await getWalletSessionToken(wallet);
       await updateSubscriptionTier(
         tierId,
@@ -159,25 +160,32 @@ export default function CreatorTiersPage() {
       );
       await loadTiers();
     } catch (err) {
-      setError((err as Error).message || "Failed to update tier.");
+      if (isCreatorMissing(err)) {
+        setNeedsProfile(true);
+        setError("Save your creator profile first to edit tiers.");
+      } else {
+        setError((err as Error).message || "Failed to update tier.");
+      }
     } finally {
       setSaving(null);
     }
   };
 
   const handleDelete = async (tierId: string) => {
-    if (needsProfile) {
-      setError("Save your creator profile first to manage tiers.");
-      return;
-    }
     try {
       setSaving(tierId);
       setError(null);
+      setNeedsProfile(false);
       const token = await getWalletSessionToken(wallet);
       await deleteSubscriptionTier(tierId, token);
       await loadTiers();
     } catch (err) {
-      setError((err as Error).message || "Failed to delete tier.");
+      if (isCreatorMissing(err)) {
+        setNeedsProfile(true);
+        setError("Save your creator profile first to manage tiers.");
+      } else {
+        setError((err as Error).message || "Failed to delete tier.");
+      }
     } finally {
       setSaving(null);
     }
