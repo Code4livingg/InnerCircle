@@ -60,6 +60,11 @@ const runWithPendingRetry = async <T,>(fn: () => Promise<T>): Promise<T> => {
   throw new Error("Timed out waiting for on-chain confirmation.");
 };
 
+const isTipAlreadyRecorded = (error: unknown): boolean =>
+  error instanceof ApiError &&
+  error.status === 409 &&
+  /already recorded/i.test(error.message ?? "");
+
 const formatCredits = (microcredits: string | null): string => {
   const value = Number(microcredits ?? "0");
   return `${(value / 1_000_000).toFixed(2)} credits / month`;
@@ -399,6 +404,15 @@ export default function CreatorPage({ params }: CreatorPageProps) {
       return;
     }
 
+    const refreshLeaderboard = async (): Promise<void> => {
+      try {
+        const data = await fetchTipLeaderboard(creator.handle);
+        setLeaderboard(data.supporters);
+      } catch {
+        // Ignore leaderboard refresh failures after a successful tip.
+      }
+    };
+
     try {
       setTipLoading(true);
 
@@ -419,16 +433,23 @@ export default function CreatorPage({ params }: CreatorPageProps) {
           delayMs: 2000,
         });
 
-        await runWithPendingRetry(() =>
-          createAnonymousTip({
-            creatorHandle: creator.handle,
-            amountMicrocredits: microcredits,
-            message: tipMessage || undefined,
-            txId: chainTxId,
-          }),
-        );
-
-        setTipSuccess("Anonymous tip sent successfully.");
+        try {
+          await runWithPendingRetry(() =>
+            createAnonymousTip({
+              creatorHandle: creator.handle,
+              amountMicrocredits: microcredits,
+              message: tipMessage || undefined,
+              txId: chainTxId,
+            }),
+          );
+          setTipSuccess("Anonymous tip sent successfully.");
+        } catch (error) {
+          if (isTipAlreadyRecorded(error)) {
+            setTipSuccess("Anonymous tip already recorded.");
+          } else {
+            throw error;
+          }
+        }
       } else {
         if (!creator.walletAddress) {
           throw new Error("Creator wallet address is missing. The creator must update their profile first.");
@@ -454,25 +475,31 @@ export default function CreatorPage({ params }: CreatorPageProps) {
           delayMs: 2000,
         });
 
-        await runWithPendingRetry(() =>
-          createTip(
-            {
-              creatorHandle: creator.handle,
-              amountMicrocredits: microcredits,
-              message: tipMessage || undefined,
-              txId: chainTxId,
-            },
-            walletToken,
-          ),
-        );
-
-        setTipSuccess("Tip sent successfully.");
+        try {
+          await runWithPendingRetry(() =>
+            createTip(
+              {
+                creatorHandle: creator.handle,
+                amountMicrocredits: microcredits,
+                message: tipMessage || undefined,
+                txId: chainTxId,
+              },
+              walletToken,
+            ),
+          );
+          setTipSuccess("Tip sent successfully.");
+        } catch (error) {
+          if (isTipAlreadyRecorded(error)) {
+            setTipSuccess("Tip already recorded.");
+          } else {
+            throw error;
+          }
+        }
       }
 
       setTipAmount("");
       setTipMessage("");
-      const data = await fetchTipLeaderboard(creator.handle);
-      setLeaderboard(data.supporters);
+      await refreshLeaderboard();
     } catch (error) {
       setTipError((error as Error).message || "Failed to send tip.");
     } finally {
