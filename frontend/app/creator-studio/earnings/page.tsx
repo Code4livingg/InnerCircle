@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useWallet } from "@/lib/walletContext";
-import { ApiError, fetchCreatorAnalytics, type CreatorAnalyticsResponse } from "../../../lib/api";
+import { ApiError, fetchCreatorAnalytics, fetchCreatorTipHistory, type CreatorAnalyticsResponse, type TipEntry } from "../../../lib/api";
 import { StatCard } from "../../../components/StatCard";
 import {
   Area,
@@ -16,15 +16,20 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { getWalletSessionToken } from "../../../lib/walletSession";
 
 const formatCredits = (microcredits: string): string =>
   `${(Number(microcredits) / 1_000_000).toFixed(2)} credits`;
 
 export default function EarningsPage() {
-  const { address } = useWallet();
+  const wallet = useWallet();
+  const { address, connected } = wallet;
   const [analytics, setAnalytics] = useState<CreatorAnalyticsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [tipHistory, setTipHistory] = useState<TipEntry[]>([]);
+  const [tipHistoryLoading, setTipHistoryLoading] = useState(false);
+  const [tipHistoryError, setTipHistoryError] = useState<string | null>(null);
 
   useEffect(() => {
     const loadAnalytics = async (): Promise<void> => {
@@ -56,6 +61,45 @@ export default function EarningsPage() {
 
     void loadAnalytics();
   }, [address]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadTipHistory = async (): Promise<void> => {
+      const creatorHandle = analytics?.creator?.handle;
+      if (!address || !connected || !creatorHandle) {
+        setTipHistory([]);
+        setTipHistoryError(null);
+        setTipHistoryLoading(false);
+        return;
+      }
+
+      setTipHistoryLoading(true);
+      setTipHistoryError(null);
+      try {
+        const token = await getWalletSessionToken(wallet);
+        const data = await fetchCreatorTipHistory(creatorHandle, token);
+        if (!cancelled) {
+          setTipHistory(data.tips);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setTipHistoryError((err as Error).message || "Failed to load tip history.");
+          setTipHistory([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setTipHistoryLoading(false);
+        }
+      }
+    };
+
+    void loadTipHistory();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [address, connected, analytics?.creator?.handle]);
 
   const summary = useMemo(() => {
     if (!analytics?.stats) {
@@ -285,6 +329,41 @@ export default function EarningsPage() {
                 </ResponsiveContainer>
               </div>
             </div>
+          </div>
+
+          <div className="card card--panel">
+            <p className="dashboard__panel-title" style={{ marginBottom: "var(--s3)" }}>
+              Tip history
+            </p>
+            {tipHistoryLoading ? <p className="t-sm t-muted">Loading tips...</p> : null}
+            {tipHistoryError ? <p className="t-sm t-error">{tipHistoryError}</p> : null}
+            {!tipHistoryLoading && !tipHistoryError && tipHistory.length === 0 ? (
+              <p className="t-sm t-muted">No tips yet.</p>
+            ) : null}
+            {!tipHistoryLoading && !tipHistoryError && tipHistory.length > 0 ? (
+              <div className="stack stack-2">
+                {tipHistory.slice(0, 12).map((tip) => (
+                  <div
+                    key={tip.id}
+                    className="row"
+                    style={{ justifyContent: "space-between", gap: "var(--s3)", flexWrap: "wrap" }}
+                  >
+                    <div className="stack stack-1">
+                      <span className="t-sm">
+                        {tip.supporter ?? (tip.isAnonymous ? "Anonymous" : "Supporter")}
+                      </span>
+                      {tip.message ? <span className="t-xs t-dim">{tip.message}</span> : null}
+                    </div>
+                    <div className="stack stack-1" style={{ textAlign: "right" }}>
+                      <span className="t-sm" style={{ color: "var(--c-text-1)" }}>
+                        {formatCredits(tip.amountMicrocredits)}
+                      </span>
+                      <span className="t-xs t-dim">{new Date(tip.createdAt).toLocaleString()}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
 
           {analytics.stats.totalRevenueMicrocredits === "0" ? (
