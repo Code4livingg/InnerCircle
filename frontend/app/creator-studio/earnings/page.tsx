@@ -18,8 +18,8 @@ import {
 } from "recharts";
 import { getWalletSessionToken } from "../../../lib/walletSession";
 
-const formatCredits = (microcredits: string): string =>
-  `${(Number(microcredits) / 1_000_000).toFixed(2)} credits`;
+const formatCredits = (microcredits?: string | null): string =>
+  `${(Number(microcredits ?? "0") / 1_000_000).toFixed(2)} credits`;
 
 export default function EarningsPage() {
   const wallet = useWallet();
@@ -30,6 +30,7 @@ export default function EarningsPage() {
   const [tipHistory, setTipHistory] = useState<TipEntry[]>([]);
   const [tipHistoryLoading, setTipHistoryLoading] = useState(false);
   const [tipHistoryError, setTipHistoryError] = useState<string | null>(null);
+  const hasAnalytics = Boolean(analytics?.creator && analytics?.stats);
 
   useEffect(() => {
     const loadAnalytics = async (): Promise<void> => {
@@ -102,40 +103,42 @@ export default function EarningsPage() {
   }, [address, connected, analytics?.creator?.handle]);
 
   const summary = useMemo(() => {
-    if (!analytics?.stats) {
+    if (!hasAnalytics) {
       return null;
     }
 
-    const subscriptionRevenue = Number(analytics.stats.subscriptionRevenueMicrocredits);
-    const ppvRevenue = Number(analytics.stats.ppvRevenueMicrocredits);
-    const tipRevenue = Number(analytics.stats.tipRevenueMicrocredits);
-    const totalRevenue = Number(analytics.stats.totalRevenueMicrocredits);
+    const subscriptionRevenue = Number(analytics!.stats.subscriptionRevenueMicrocredits ?? 0);
+    const ppvRevenue = Number(analytics!.stats.ppvRevenueMicrocredits ?? 0);
+    const tipRevenue = Number(analytics!.stats.tipRevenueMicrocredits ?? 0);
+    const totalRevenue = Number(analytics!.stats.totalRevenueMicrocredits ?? 0);
 
     return {
-      totalRevenueLabel: formatCredits(analytics.stats.totalRevenueMicrocredits),
-      monthlyRevenueLabel: formatCredits(analytics.stats.monthlyRevenueMicrocredits),
-      subscriptionRevenueLabel: formatCredits(analytics.stats.subscriptionRevenueMicrocredits),
-      ppvRevenueLabel: formatCredits(analytics.stats.ppvRevenueMicrocredits),
-      tipRevenueLabel: formatCredits(analytics.stats.tipRevenueMicrocredits),
+      totalRevenueLabel: formatCredits(analytics!.stats.totalRevenueMicrocredits),
+      monthlyRevenueLabel: formatCredits(analytics!.stats.monthlyRevenueMicrocredits),
+      subscriptionRevenueLabel: formatCredits(analytics!.stats.subscriptionRevenueMicrocredits),
+      ppvRevenueLabel: formatCredits(analytics!.stats.ppvRevenueMicrocredits),
+      tipRevenueLabel: formatCredits(analytics!.stats.tipRevenueMicrocredits),
       mixLabel:
         totalRevenue > 0
           ? `${Math.round((subscriptionRevenue / totalRevenue) * 100)}% subscription / ${Math.round((ppvRevenue / totalRevenue) * 100)}% PPV / ${Math.round((tipRevenue / totalRevenue) * 100)}% tips`
           : "No paid unlocks recorded yet",
     };
-  }, [analytics]);
+  }, [analytics, hasAnalytics]);
 
   const chartData = useMemo(() => {
     const series = Array.isArray(analytics?.series) ? analytics.series : [];
     if (series.length === 0) return [];
-    return series.map((point) => ({
-      date: point.date.slice(5),
-      revenue:
-        (Number(point.subscriptionRevenueMicrocredits) +
-          Number(point.ppvRevenueMicrocredits) +
-          Number(point.tipRevenueMicrocredits)) /
-        1_000_000,
-      views: point.contentViews,
-    }));
+    return series
+      .filter((point) => Boolean(point && typeof point.date === "string"))
+      .map((point) => ({
+        date: point.date.slice(5),
+        revenue:
+          (Number(point.subscriptionRevenueMicrocredits ?? 0) +
+            Number(point.ppvRevenueMicrocredits ?? 0) +
+            Number(point.tipRevenueMicrocredits ?? 0)) /
+          1_000_000,
+        views: Number(point.contentViews ?? 0),
+      }));
   }, [analytics]);
 
   return (
@@ -169,7 +172,7 @@ export default function EarningsPage() {
         </div>
       ) : null}
 
-      {!loading && analytics && summary ? (
+      {!loading && hasAnalytics && summary ? (
         <div className="stack stack-4">
           <div className="stats-grid">
             <StatCard
@@ -187,13 +190,13 @@ export default function EarningsPage() {
             <StatCard
               label="Subscription Revenue"
               value={summary.subscriptionRevenueLabel}
-              sub={`${analytics.stats.activeSubscriberCount} active subscribers`}
+              sub={`${analytics!.stats.activeSubscriberCount ?? 0} active subscribers`}
               accent="var(--c-success)"
             />
             <StatCard
               label="PPV Revenue"
               value={summary.ppvRevenueLabel}
-              sub={`${analytics.stats.ppvPostCount} PPV posts available`}
+              sub={`${analytics!.stats.ppvPostCount ?? 0} PPV posts available`}
             />
             <StatCard
               label="Tip Revenue"
@@ -202,8 +205,8 @@ export default function EarningsPage() {
             />
             <StatCard
               label="Content Views"
-              value={analytics.stats.contentViewCount.toLocaleString()}
-              sub={`${analytics.stats.monthlyContentViewCount.toLocaleString()} views this month`}
+              value={(analytics!.stats.contentViewCount ?? 0).toLocaleString()}
+              sub={`${(analytics!.stats.monthlyContentViewCount ?? 0).toLocaleString()} views this month`}
             />
           </div>
 
@@ -226,19 +229,19 @@ export default function EarningsPage() {
                 <div className="row" style={{ justifyContent: "space-between", gap: "var(--s3)", flexWrap: "wrap" }}>
                   <span className="t-sm t-muted">Current subscription price</span>
                   <span className="t-sm" style={{ color: "var(--c-text-1)" }}>
-                    {formatCredits(analytics.creator.subscriptionPriceMicrocredits)}
+                    {formatCredits(analytics!.creator.subscriptionPriceMicrocredits)}
                   </span>
                 </div>
                 <div className="row" style={{ justifyContent: "space-between", gap: "var(--s3)", flexWrap: "wrap" }}>
                   <span className="t-sm t-muted">Total subscribers acquired</span>
                   <span className="t-sm" style={{ color: "var(--c-text-1)" }}>
-                    {analytics.stats.totalSubscriberCount}
+                    {analytics!.stats.totalSubscriberCount ?? 0}
                   </span>
                 </div>
                 <div className="row" style={{ justifyContent: "space-between", gap: "var(--s3)", flexWrap: "wrap" }}>
                   <span className="t-sm t-muted">Churn rate (30d)</span>
                   <span className="t-sm" style={{ color: "var(--c-text-1)" }}>
-                    {(analytics.stats.churnRate * 100).toFixed(1)}%
+                    {((analytics!.stats.churnRate ?? 0) * 100).toFixed(1)}%
                   </span>
                 </div>
               </div>
@@ -252,25 +255,25 @@ export default function EarningsPage() {
                 <div className="row" style={{ justifyContent: "space-between", gap: "var(--s3)", flexWrap: "wrap" }}>
                   <span className="t-sm t-muted">Published posts</span>
                   <span className="t-sm" style={{ color: "var(--c-text-1)" }}>
-                    {analytics.stats.publishedContentCount}
+                    {analytics!.stats.publishedContentCount ?? 0}
                   </span>
                 </div>
                 <div className="row" style={{ justifyContent: "space-between", gap: "var(--s3)", flexWrap: "wrap" }}>
                   <span className="t-sm t-muted">Subscription posts</span>
                   <span className="t-sm" style={{ color: "var(--c-text-1)" }}>
-                    {analytics.stats.subscriptionPostCount}
+                    {analytics!.stats.subscriptionPostCount ?? 0}
                   </span>
                 </div>
                 <div className="row" style={{ justifyContent: "space-between", gap: "var(--s3)", flexWrap: "wrap" }}>
                   <span className="t-sm t-muted">Public posts</span>
                   <span className="t-sm" style={{ color: "var(--c-text-1)" }}>
-                    {analytics.stats.publicPostCount}
+                    {analytics!.stats.publicPostCount ?? 0}
                   </span>
                 </div>
                 <div className="row" style={{ justifyContent: "space-between", gap: "var(--s3)", flexWrap: "wrap" }}>
                   <span className="t-sm t-muted">PPV posts</span>
                   <span className="t-sm" style={{ color: "var(--c-text-1)" }}>
-                    {analytics.stats.ppvPostCount}
+                    {analytics!.stats.ppvPostCount ?? 0}
                   </span>
                 </div>
                 <div className="row" style={{ justifyContent: "space-between", gap: "var(--s3)", flexWrap: "wrap" }}>
@@ -366,7 +369,7 @@ export default function EarningsPage() {
             ) : null}
           </div>
 
-          {analytics.stats.totalRevenueMicrocredits === "0" ? (
+          {analytics!.stats.totalRevenueMicrocredits === "0" ? (
             <div className="empty-state">
               <span className="empty-state__icon">OK</span>
               <span className="empty-state__title">No verified earnings yet</span>
