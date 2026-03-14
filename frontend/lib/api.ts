@@ -29,7 +29,7 @@ const throwApiError = async (res: Response): Promise<never> => {
   const fallbackMessage =
     payload.error ??
     (res.status >= 500 && res.status <= 504
-      ? "Could not reach the backend API. Is the server running?"
+      ? "Backend API unreachable. Set API_PROXY_BASE or NEXT_PUBLIC_API_BASE and confirm the server is running."
       : res.statusText || "Request failed");
 
   throw new ApiError(fallbackMessage, res.status, payload.code);

@@ -4,15 +4,20 @@ const normalizeApiBase = (value) => {
   return trimmed.endsWith("/api") ? trimmed.slice(0, -4) : trimmed;
 };
 
-const apiProxyBase = normalizeApiBase(
-  process.env.API_PROXY_BASE ??
-    process.env.NEXT_PUBLIC_API_BASE ??
-    "http://localhost:8080",
-);
+const configuredApiBase = process.env.API_PROXY_BASE ?? process.env.NEXT_PUBLIC_API_BASE;
+const apiProxyBase = configuredApiBase
+  ? normalizeApiBase(configuredApiBase)
+  : process.env.NODE_ENV === "development"
+    ? "http://localhost:8080"
+    : "";
 
 const nextConfig = {
   reactStrictMode: true,
   async rewrites() {
+    if (!apiProxyBase) {
+      return [];
+    }
+
     return [
       {
         source: "/api/:path*",
