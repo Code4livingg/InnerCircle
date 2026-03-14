@@ -58,7 +58,7 @@ export default function EarningsPage() {
   }, [address]);
 
   const summary = useMemo(() => {
-    if (!analytics) {
+    if (!analytics?.stats) {
       return null;
     }
 
@@ -81,8 +81,9 @@ export default function EarningsPage() {
   }, [analytics]);
 
   const chartData = useMemo(() => {
-    if (!analytics) return [];
-    return analytics.series.map((point) => ({
+    const series = Array.isArray(analytics?.series) ? analytics.series : [];
+    if (series.length === 0) return [];
+    return series.map((point) => ({
       date: point.date.slice(5),
       revenue:
         (Number(point.subscriptionRevenueMicrocredits) +
@@ -98,7 +99,7 @@ export default function EarningsPage() {
       <div className="stack stack-2" style={{ marginBottom: "var(--s6)" }}>
         <p className="section__label">Creator Studio</p>
         <h1 style={{ fontSize: "1.75rem" }}>
-          {analytics ? `${analytics.creator.displayName ?? analytics.creator.handle} Earnings` : "Earnings"}
+          {analytics?.creator ? `${analytics.creator.displayName ?? analytics.creator.handle} Earnings` : "Earnings"}
         </h1>
       </div>
 
