@@ -74,7 +74,7 @@ const findCreatorForSession = async (session: WalletSession): Promise<{
       where: { id: creatorByAddress.id },
       data: {
         walletHash: session.wh,
-        walletAddress: session.addr,
+        walletAddress: session.addr ?? creatorByAddress.walletAddress,
       },
       select: { id: true, walletHash: true, walletAddress: true },
     });

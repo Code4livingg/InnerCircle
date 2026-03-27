@@ -13,6 +13,18 @@ const apiProxyBase = configuredApiBase
 
 const nextConfig = {
   reactStrictMode: true,
+  transpilePackages: ["@provablehq/sdk", "@provablehq/wasm"],
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+          { key: "Cross-Origin-Embedder-Policy", value: "require-corp" },
+        ],
+      },
+    ];
+  },
   async rewrites() {
     if (!apiProxyBase) {
       return [];
@@ -26,15 +38,44 @@ const nextConfig = {
     ];
   },
   webpack: (config, { isServer }) => {
-    if (!isServer) {
-      // Wallet adapter packages use Node.js modules that need to be polyfilled
-      config.resolve.fallback = {
-        ...config.resolve.fallback,
-        fs: false,
-        net: false,
-        tls: false,
-      };
+    config.experiments = {
+      ...config.experiments,
+      topLevelAwait: true,
+      asyncWebAssembly: true,
+      layers: true,
+    };
+
+    config.resolve.fallback = {
+      ...config.resolve.fallback,
+      fs: false,
+      path: false,
+      crypto: false,
+      net: false,
+      tls: false,
+    };
+
+    config.module.rules.push({
+      test: /\.wasm$/,
+      type: "asset/resource",
+    });
+
+    config.output = {
+      ...config.output,
+      environment: {
+        ...config.output?.environment,
+        asyncFunction: true,
+      },
+    };
+
+    if (isServer) {
+      const externals = Array.isArray(config.externals)
+        ? config.externals
+        : config.externals
+          ? [config.externals]
+          : [];
+      config.externals = [...externals, "@provablehq/wasm", "@provablehq/sdk"];
     }
+
     return config;
   },
 };

@@ -3,12 +3,24 @@
 import { useEffect, useState } from "react";
 import { toApiUrl } from "@/lib/apiBase";
 import { useWallet } from "@/lib/walletContext";
-import { ApiError, fetchCreatorByWallet, fetchCreatorVerificationStatus, submitCreatorVerification } from "../../../lib/api";
+import {
+    ApiError,
+    fetchCreatorByWallet,
+    fetchCreatorVerificationStatus,
+    setCreatorPaymentPreferences,
+    submitCreatorVerification,
+    type CreatorPaymentAsset,
+    type CreatorPaymentVisibility,
+} from "../../../lib/api";
 import {
     claimWalletRoleWithBackend,
     syncWalletRoleFromBackend,
     WalletRoleConflictError,
 } from "../../../lib/walletRole";
+import {
+    readStoredCreatorPaymentPreferences,
+    storeCreatorPaymentPreferences,
+} from "../../../lib/creatorPaymentPreferences";
 import { getWalletSessionToken } from "../../../lib/walletSession";
 
 const readApiError = async (res: Response): Promise<string> => {
@@ -31,6 +43,8 @@ export default function CreatorProfilePage() {
         displayName: "",
         bio: "",
         subscriptionPrice: "",
+        acceptedPaymentAssets: ["ALEO_CREDITS"] as CreatorPaymentAsset[],
+        acceptedPaymentVisibilities: ["PUBLIC", "PRIVATE"] as CreatorPaymentVisibility[],
     });
 
     const [verificationStatus, setVerificationStatus] = useState<string | null>(null);
@@ -47,6 +61,8 @@ export default function CreatorProfilePage() {
                     displayName: "",
                     bio: "",
                     subscriptionPrice: "",
+                    acceptedPaymentAssets: ["ALEO_CREDITS"] as CreatorPaymentAsset[],
+                    acceptedPaymentVisibilities: ["PUBLIC", "PRIVATE"] as CreatorPaymentVisibility[],
                 });
                 setHydrating(false);
                 return;
@@ -64,6 +80,7 @@ export default function CreatorProfilePage() {
                 await claimWalletRoleWithBackend(address, "creator");
 
                 const creator = data.creator;
+                const storedPaymentPreferences = readStoredCreatorPaymentPreferences(creator.handle);
                 setForm({
                     walletAddress: address,
                     handle: creator.handle,
@@ -72,6 +89,18 @@ export default function CreatorProfilePage() {
                     subscriptionPrice: creator.subscriptionPriceMicrocredits
                         ? (Number(creator.subscriptionPriceMicrocredits) / 1_000_000).toString()
                         : "",
+                    acceptedPaymentAssets:
+                        storedPaymentPreferences?.acceptedPaymentAssets
+                            ? storedPaymentPreferences.acceptedPaymentAssets
+                            : creator.acceptedPaymentAssets && creator.acceptedPaymentAssets.length > 0
+                            ? (creator.acceptedPaymentAssets as CreatorPaymentAsset[])
+                            : ["ALEO_CREDITS"],
+                    acceptedPaymentVisibilities:
+                        storedPaymentPreferences?.acceptedPaymentVisibilities
+                            ? storedPaymentPreferences.acceptedPaymentVisibilities
+                            : creator.acceptedPaymentVisibilities && creator.acceptedPaymentVisibilities.length > 0
+                            ? (creator.acceptedPaymentVisibilities as CreatorPaymentVisibility[])
+                            : ["PUBLIC", "PRIVATE"],
                 });
                 localStorage.setItem("innercircle_creator_handle", creator.handle);
             } catch {
@@ -101,6 +130,28 @@ export default function CreatorProfilePage() {
     const update = (field: string, value: string) =>
         setForm((prev) => ({ ...prev, [field]: value }));
 
+    const toggleAsset = (asset: CreatorPaymentAsset) =>
+        setForm((prev) => {
+            const next = prev.acceptedPaymentAssets.includes(asset)
+                ? prev.acceptedPaymentAssets.filter((value) => value !== asset)
+                : [...prev.acceptedPaymentAssets, asset];
+            return {
+                ...prev,
+                acceptedPaymentAssets: next.length > 0 ? next : ["ALEO_CREDITS"],
+            };
+        });
+
+    const toggleVisibility = (visibility: CreatorPaymentVisibility) =>
+        setForm((prev) => {
+            const next = prev.acceptedPaymentVisibilities.includes(visibility)
+                ? prev.acceptedPaymentVisibilities.filter((value) => value !== visibility)
+                : [...prev.acceptedPaymentVisibilities, visibility];
+            return {
+                ...prev,
+                acceptedPaymentVisibilities: next.length > 0 ? next : ["PUBLIC"],
+            };
+        });
+
     const save = async () => {
         if (!form.walletAddress || !form.handle) {
             setError("Wallet address and handle are required.");
@@ -122,6 +173,8 @@ export default function CreatorProfilePage() {
                     handle: form.handle,
                     displayName: form.displayName || undefined,
                     bio: form.bio || undefined,
+                    acceptedPaymentAssets: form.acceptedPaymentAssets,
+                    acceptedPaymentVisibilities: form.acceptedPaymentVisibilities,
                 }),
             });
 
@@ -141,7 +194,24 @@ export default function CreatorProfilePage() {
                 }
             }
 
+            try {
+                await setCreatorPaymentPreferences({
+                    walletAddress: form.walletAddress,
+                    acceptedPaymentAssets: form.acceptedPaymentAssets,
+                    acceptedPaymentVisibilities: form.acceptedPaymentVisibilities,
+                });
+            } catch (err) {
+                if (!(err instanceof ApiError && err.status === 404)) {
+                    throw err;
+                }
+            }
+
             localStorage.setItem("innercircle_creator_handle", form.handle);
+            storeCreatorPaymentPreferences(
+                form.handle,
+                form.acceptedPaymentAssets,
+                form.acceptedPaymentVisibilities,
+            );
             setSuccess(true);
         } catch (err) {
             if (err instanceof WalletRoleConflictError) {
@@ -201,7 +271,7 @@ export default function CreatorProfilePage() {
             <div className="card card--panel stack stack-4">
                 <div className="form-group">
                     <label className="form-label">Wallet Address *</label>
-                    <input className="form-input" placeholder="aleo1..." value={form.walletAddress} onChange={(e) => update("walletAddress", e.target.value)} id="profile-wallet" />
+                    <input className="form-input" type="password" placeholder="Connected wallet (hidden)" value={form.walletAddress} onChange={(e) => update("walletAddress", e.target.value)} id="profile-wallet" />
                 </div>
                 <div className="form-group">
                     <label className="form-label">Handle *</label>
@@ -220,6 +290,50 @@ export default function CreatorProfilePage() {
                     <label className="form-label">Monthly Subscription Price (credits)</label>
                     <input className="form-input" type="number" min="0" step="0.01" placeholder="e.g. 5.00 (leave blank for free)" value={form.subscriptionPrice} onChange={(e) => update("subscriptionPrice", e.target.value)} id="profile-price" />
                     <span className="form-hint">This sets the default subscription price. Manage tier pricing in the Tiers tab.</span>
+                </div>
+                <div className="form-group">
+                    <label className="form-label">Accepted payment assets</label>
+                    <div className="stack stack-1">
+                        <label className="row row-2" style={{ alignItems: "center" }}>
+                            <input
+                                type="checkbox"
+                                checked={form.acceptedPaymentAssets.includes("ALEO_CREDITS")}
+                                onChange={() => toggleAsset("ALEO_CREDITS")}
+                            />
+                            <span className="t-sm">Aleo credits</span>
+                        </label>
+                        <label className="row row-2" style={{ alignItems: "center" }}>
+                            <input
+                                type="checkbox"
+                                checked={form.acceptedPaymentAssets.includes("USDCX")}
+                                onChange={() => toggleAsset("USDCX")}
+                            />
+                            <span className="t-sm">USDCx</span>
+                        </label>
+                    </div>
+                    <span className="form-hint">USDCx selection is saved now. Settlement still requires a USDCx-compatible subscription program deployment.</span>
+                </div>
+                <div className="form-group">
+                    <label className="form-label">Accepted payment visibility</label>
+                    <div className="stack stack-1">
+                        <label className="row row-2" style={{ alignItems: "center" }}>
+                            <input
+                                type="checkbox"
+                                checked={form.acceptedPaymentVisibilities.includes("PUBLIC")}
+                                onChange={() => toggleVisibility("PUBLIC")}
+                            />
+                            <span className="t-sm">Public balance</span>
+                        </label>
+                        <label className="row row-2" style={{ alignItems: "center" }}>
+                            <input
+                                type="checkbox"
+                                checked={form.acceptedPaymentVisibilities.includes("PRIVATE")}
+                                onChange={() => toggleVisibility("PRIVATE")}
+                            />
+                            <span className="t-sm">Private record</span>
+                        </label>
+                    </div>
+                    <span className="form-hint">Private payment still depends on the wallet exposing spendable records and keeping enough public balance for fees.</span>
                 </div>
                 <button className="btn btn--primary" onClick={() => void save()} disabled={loading} id="profile-save">
                     {loading ? "Saving..." : "Save Changes"}

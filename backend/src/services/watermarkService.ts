@@ -14,11 +14,17 @@ export const createWatermarkId = (walletHash: string, contentId: string, session
 };
 
 export const applyInvisibleWatermark = (chunk: Buffer, watermarkId: string): Buffer => {
-  // Placeholder: integrate ffmpeg bitstream watermarking or forensic SDK here.
-  // This keeps circuit complexity off-chain and enables per-session fingerprinting.
+  // We avoid mutating binary media bytes here because naive byte injection would
+  // corrupt MP4/JPEG payloads. The active watermark is carried in response
+  // metadata headers keyed by the same watermark id and session id.
   void watermarkId;
   return chunk;
 };
+
+export const buildWatermarkHeaders = (sessionId: string, watermarkId: string): Record<string, string> => ({
+  "X-Watermark-Id": watermarkId,
+  "X-Session-Watermark": sessionId,
+});
 
 export const buildWatermarkEvent = (
   walletHash: string,

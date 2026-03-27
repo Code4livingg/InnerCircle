@@ -292,7 +292,8 @@ export const verifyLiveStreamPpvPurchase = async (req: WalletSessionRequest, res
     const verified = await verifyPpvPayment({
       contentFieldId: liveStream.purchaseFieldId,
       purchaseTxId: payload.txId,
-      walletAddressHint: payload.walletAddressHint ?? session.addr,
+      // New wallet-session JWTs do not carry the raw wallet address.
+      walletAddressHint: payload.walletAddressHint,
       expectedPriceMicrocredits: priceMicrocredits,
       expectedRecipientAddress: liveStream.creator.walletAddress,
     });

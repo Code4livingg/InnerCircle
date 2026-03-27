@@ -360,6 +360,16 @@ export default function CreatorDashboardPage() {
           </div>
         </section>
       </div>
+
+      <section style={{ ...panelStyle, marginTop: "var(--s4)" }}>
+        <h2 style={{ fontSize: "2rem", marginBottom: "var(--s2)" }}>Private Live Messages</h2>
+        <p className="t-sm t-muted" style={{ marginBottom: "var(--s3)" }}>
+          Viewer comments are end-to-end encrypted and delivered only to your creator dashboard while live.
+        </p>
+        <Link href="/creator-studio/go-live" className="btn btn--secondary">
+          Open Live Control
+        </Link>
+      </section>
     </div>
   );
 }

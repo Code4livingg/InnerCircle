@@ -1,10 +1,13 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import jwt from "jsonwebtoken";
 import { env } from "../config/env.js";
+import { sha256Hex } from "../utils/crypto.js";
 import type { AccessScope, SessionClaims } from "../types/session.js";
 
 export interface CreateSessionInput {
-  walletHash: string;
+  // `identitySeed` is the already-verified wallet identity input. We derive an
+  // unlinkable per-session subject from it instead of reusing the stable hash.
+  identitySeed: string;
   scope: AccessScope;
 }
 
@@ -14,14 +17,23 @@ export interface SessionTokenResult {
   expiresAt: number;
 }
 
-export const createSessionToken = ({ walletHash, scope }: CreateSessionInput): SessionTokenResult => {
+export const createSessionSubject = (identitySeed: string, sessionId: string): string => {
+  const salt = randomBytes(16).toString("hex");
+  return sha256Hex(`${identitySeed}:${sessionId}:${salt}:${env.sessionSecret}`);
+};
+
+export const createSessionToken = ({ identitySeed, scope }: CreateSessionInput): SessionTokenResult => {
   const sessionId = randomUUID();
   const expiresAt = Math.floor(Date.now() / 1000) + env.sessionTtlSeconds;
+  const sessionSubject = createSessionSubject(identitySeed, sessionId);
 
   const token = jwt.sign(
     {
       sid: sessionId,
-      wh: walletHash,
+      // `wh` is kept for backward compatibility with existing middleware, but
+      // new access sessions carry the unlinkable session subject here.
+      wh: sessionSubject,
+      ssh: sessionSubject,
       scope,
       exp: expiresAt,
     },

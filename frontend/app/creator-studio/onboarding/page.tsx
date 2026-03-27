@@ -172,8 +172,8 @@ export default function OnboardingPage() {
                 <div className="card card--panel stack stack-4">
                     <div className="form-group">
                         <label className="form-label">Wallet Address *</label>
-                        <input className="form-input" placeholder="aleo1..." value={form.walletAddress} onChange={(e) => update("walletAddress", e.target.value)} id="onboard-wallet" />
-                        <span className="form-hint">Your Aleo wallet address. Used to identify your creator account.</span>
+                        <input className="form-input" type="password" placeholder="Connected wallet (hidden)" value={form.walletAddress} onChange={(e) => update("walletAddress", e.target.value)} id="onboard-wallet" />
+                        <span className="form-hint">Your Aleo wallet identity is stored privately.</span>
                     </div>
                     <div className="form-group">
                         <label className="form-label">Handle *</label>

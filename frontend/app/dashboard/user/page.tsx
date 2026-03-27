@@ -1,9 +1,11 @@
 ﻿"use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { toApiUrl } from "@/lib/apiBase";
 import { useWallet } from "@/lib/walletContext";
+import { useAnonymousMode } from "@/features/anonymous/useAnonymousMode";
+import { displayIdentity } from "@/features/anonymous/identity";
 import { fetchTipHistory, type TipEntry } from "@/lib/api";
 import { getWalletSessionToken } from "@/lib/walletSession";
 
@@ -35,6 +37,8 @@ type FeedContent = {
 export default function UserDashboardPage() {
   const wallet = useWallet();
   const { connected, publicKey } = wallet;
+  const { enabled: anonEnabled, sessionId: anonSessionId } = useAnonymousMode();
+  const identityLabel = displayIdentity({ anonymousMode: anonEnabled, sessionId: anonSessionId, fallback: "Wallet Connected" });
 
   const [feedCreators, setFeedCreators] = useState<FeedCreator[]>([]);
   const [feedContents, setFeedContents] = useState<FeedContent[]>([]);
@@ -42,7 +46,6 @@ export default function UserDashboardPage() {
   const [tipHistory, setTipHistory] = useState<TipEntry[]>([]);
   const [tipError, setTipError] = useState<string>("");
 
-  const walletAddress = useMemo(() => (connected ? publicKey : null), [connected, publicKey]);
 
   useEffect(() => {
     const run = async () => {
@@ -124,8 +127,8 @@ export default function UserDashboardPage() {
         <article className="card stack">
           <h3>Wallet Status</h3>
           <p>
-            {walletAddress
-              ? `Connected wallet: ${walletAddress}`
+            {connected
+              ? `Connected identity: ${identityLabel}`
               : "Connect a wallet to verify creator subscriptions and PPV purchases."}
           </p>
           <p>InnerCircle now uses direct credits.aleo/transfer_public payments instead of custom payment programs.</p>

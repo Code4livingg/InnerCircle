@@ -24,7 +24,7 @@ export interface StreamAccessGrant {
 
 export const issueStreamGrant = (walletHash: string, contentId: string): StreamAccessGrant => {
   const { token, expiresAt } = createSessionToken({
-    walletHash,
+    identitySeed: walletHash,
     scope: { type: "ppv", contentId },
   });
   return { streamToken: token, expiresAt };

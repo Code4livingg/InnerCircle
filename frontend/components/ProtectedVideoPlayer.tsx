@@ -7,7 +7,7 @@ interface ProtectedVideoPlayerProps {
   src: string;
   title?: string;
   fingerprint: string;
-  shortWallet: string;
+  viewerLabel: string;
   sessionId: string;
 }
 
@@ -15,7 +15,7 @@ export function ProtectedVideoPlayer({
   src,
   title,
   fingerprint,
-  shortWallet,
+  viewerLabel,
   sessionId,
 }: ProtectedVideoPlayerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -95,7 +95,7 @@ export function ProtectedVideoPlayer({
       <DynamicWatermark
         key={overlayNonce}
         fingerprint={fingerprint}
-        shortWallet={shortWallet}
+        viewerLabel={viewerLabel}
         sessionId={sessionId}
       />
     </div>

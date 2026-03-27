@@ -6,6 +6,7 @@ import {
   getCreatorByWalletAddress,
   listCreators,
   registerCreator,
+  setCreatorPaymentPreferences,
   setCreatorPricing,
 } from "../controllers/creators.controller.js";
 
@@ -18,5 +19,6 @@ creatorsRouter.get("/analytics/:walletAddress", getCreatorAnalyticsByWalletAddre
 creatorsRouter.get("/by-wallet/:walletAddress", getCreatorByWalletAddress);
 creatorsRouter.get("/:handle", getCreatorByHandle);
 creatorsRouter.post("/pricing", setCreatorPricing);
+creatorsRouter.post("/payment-preferences", setCreatorPaymentPreferences);
 
 export { creatorsRouter };

@@ -21,17 +21,9 @@ const getServerApiBase = (): string => {
 };
 
 export const getApiBase = (): string => {
-  const publicBase = process.env.NEXT_PUBLIC_API_BASE?.trim();
-  if (publicBase) {
-    return normalizeApiBase(publicBase);
-  }
-
   if (typeof window !== "undefined") {
-    const host = window.location.hostname;
-    if (host === "localhost" || host === "127.0.0.1") {
-      return normalizeApiBase(DEFAULT_LOCAL_API_BASE);
-    }
-    // Use same-origin /api in the browser by default.
+    // Always use the frontend's /api proxy in the browser so env resolution
+    // and backend routing stay on the server side.
     return "";
   }
 

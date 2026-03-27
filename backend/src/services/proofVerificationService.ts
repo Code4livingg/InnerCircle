@@ -1,7 +1,8 @@
 import { env } from "../config/env.js";
 import { sha256Hex } from "../utils/crypto.js";
 import type { ExplorerTransition, ExplorerTransitionIO, ExplorerTx } from "./aleoExplorerService.js";
-import { extractFeePayerAddress, fetchExplorerTx, isExecuteTx } from "./aleoExplorerService.js";
+import { ExplorerRequestError, extractFeePayerAddress, fetchExplorerTx, isExecuteTx } from "./aleoExplorerService.js";
+import { approximateExpiryDateFromBlockHeights } from "./subscriptionService.js";
 
 export interface SubscriptionProofInput {
   creatorFieldId: string;
@@ -68,6 +69,29 @@ export interface TipPaymentInput {
   walletAddressHint?: string;
   expectedPriceMicrocredits: bigint;
   expectedRecipientAddress: string;
+}
+
+export interface ZkExecutionProofInput {
+  programId: string;
+  transitionName: string;
+  publicInputs: {
+    circleId?: string;
+    currentBlock?: number;
+    expiresAt?: number;
+    tier?: number;
+  };
+  executionProof: string;
+  verifyingKey?: string;
+  programSource?: string;
+}
+
+export interface VerifiedZkSubscriptionProof {
+  verified: true;
+  circleId: string;
+  currentBlock: number;
+  expiresAtBlock: number;
+  expiresAt: Date;
+  tier: number;
 }
 
 const toFieldLiteral = (value: string): string => (value.endsWith("field") ? value : `${value}field`);
@@ -141,9 +165,11 @@ const verifyDirectCreditsTransfer = async ({
   walletAddressHint?: string;
 }): Promise<{ walletHash: string }> => {
   const tx = await fetchExplorerTx(txId);
-  const transition = findTransition(tx, "credits.aleo", "transfer_public");
+  const transition =
+    findTransition(tx, "credits.aleo", "transfer_public") ??
+    findTransition(tx, "credits.aleo", "transfer_private_to_public");
   if (!transition) {
-    throw new Error("credits.aleo/transfer_public transition not found in transaction");
+    throw new Error("credits.aleo direct transfer transition not found in transaction");
   }
 
   if (!txAppearsAccepted(tx)) {
@@ -249,6 +275,331 @@ const resolveAllowedFunctionName = (
   }
   return provided;
 };
+
+const stripVisibilitySuffix = (value: string): string => value.trim().replace(/\.(public|private)$/i, "");
+
+const normalizeFieldLiteral = (value: string): string => stripVisibilitySuffix(value).replace(/field$/i, "");
+
+const parseUnsignedLiteral = (value: string, suffix: "u8" | "u32" | "u64"): number => {
+  const normalized = stripVisibilitySuffix(value);
+  const match = new RegExp(`^(\\d+)${suffix}$`, "i").exec(normalized);
+  if (!match) {
+    throw new Error(`Expected ${suffix} literal, received "${value}"`);
+  }
+
+  return Number.parseInt(match[1], 10);
+};
+
+const parseBooleanLiteral = (value: string): boolean => {
+  const normalized = stripVisibilitySuffix(value).toLowerCase();
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+  throw new Error(`Expected boolean literal, received "${value}"`);
+};
+
+const stringifyTransitionValue = (value: unknown): string => {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (value && typeof value === "object" && typeof (value as { toString?: () => string }).toString === "function") {
+    return (value as { toString: () => string }).toString();
+  }
+
+  return String(value ?? "");
+};
+
+const extractTransitionIoValues = (ioEntries: unknown[]): string[] => {
+  return ioEntries
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return { type: "", value: stringifyTransitionValue(entry) };
+      }
+
+      const io = entry as { type?: unknown; value?: unknown };
+      return {
+        type: typeof io.type === "string" ? io.type : "",
+        value: stringifyTransitionValue(io.value ?? entry),
+      };
+    })
+    .filter((entry) => entry.type.toLowerCase().includes("public"))
+    .map((entry) => entry.value);
+};
+
+const computeSubscriptionProofNullifier = (
+  ownerAddress: string,
+  circleId: string,
+  expiresAtBlock: number,
+): string => sha256Hex(`${ownerAddress.trim().toLowerCase()}:${circleId.trim()}:${expiresAtBlock}`);
+
+type AleoProofSdkModule = {
+  AleoNetworkClient: new (host: string) => {
+    getProgram: (programId: string) => Promise<string>;
+    getDeploymentTransactionForProgram?: (programId: string) => Promise<unknown>;
+  };
+  Execution: {
+    fromString: (value: string) => {
+      transitions: () => unknown[];
+    };
+  };
+  Program: {
+    fromString: (value: string) => unknown;
+  };
+  VerifyingKey: {
+    fromString: (value: string) => unknown;
+  };
+  verifyFunctionExecution: (
+    execution: unknown,
+    verifyingKey: unknown,
+    program: unknown,
+    functionId: string,
+  ) => boolean;
+};
+
+const loadAleoProofSdk = async (): Promise<AleoProofSdkModule> => {
+  return (await import("@provablehq/sdk/testnet.js")) as AleoProofSdkModule;
+};
+
+const parseLatestBlockHeight = (value: unknown, depth = 0): number | undefined => {
+  if (depth > 6 || value === null || value === undefined) return undefined;
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) && Number.isInteger(value) && value >= 0 ? value : undefined;
+  }
+
+  if (typeof value === "bigint") {
+    return value >= 0n ? Number(value) : undefined;
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+
+    const rawNumber = Number.parseInt(trimmed, 10);
+    if (Number.isFinite(rawNumber) && /^\d+$/.test(trimmed)) {
+      return rawNumber;
+    }
+
+    const literalMatch = trimmed.match(/(\d+)/);
+    if (literalMatch) {
+      return Number.parseInt(literalMatch[1], 10);
+    }
+
+    return undefined;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const parsed = parseLatestBlockHeight(item, depth + 1);
+      if (parsed !== undefined) return parsed;
+    }
+    return undefined;
+  }
+
+  if (typeof value === "object") {
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+      const parsed = parseLatestBlockHeight(nested, depth + 1);
+      if (parsed !== undefined) return parsed;
+    }
+  }
+
+  return undefined;
+};
+
+const fetchExplorerLatestBlockHeight = async (): Promise<number> => {
+  const base = env.aleoEndpoint.replace(/\/+$/, "");
+  const url = `${base}/${env.aleoNetwork}/block/height/latest`;
+  const response = await fetch(url, {
+    headers: { Accept: "application/json, text/plain" },
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new ExplorerRequestError(response.status, `Explorer latest block fetch failed (${response.status}): ${body.slice(0, 200)}`);
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  const payload: unknown = contentType.includes("application/json")
+    ? await response.json()
+    : await response.text();
+  const height = parseLatestBlockHeight(payload);
+  if (height === undefined) {
+    throw new Error("Explorer returned an invalid latest block height.");
+  }
+
+  return height;
+};
+
+const findVerifyingKeyInDeployment = (deploymentTx: unknown, functionName: string): string | undefined => {
+  const deployment = (deploymentTx as { deployment?: unknown })?.deployment;
+  const verifyingKeys = (deployment as { verifying_keys?: unknown })?.verifying_keys;
+
+  if (Array.isArray(verifyingKeys)) {
+    for (const entry of verifyingKeys) {
+      if (
+        Array.isArray(entry) &&
+        entry.length >= 2 &&
+        typeof entry[0] === "string" &&
+        entry[0] === functionName &&
+        Array.isArray(entry[1]) &&
+        typeof entry[1][1] === "string"
+      ) {
+        return entry[1][1];
+      }
+    }
+  }
+
+  if (verifyingKeys && typeof verifyingKeys === "object") {
+    const nested = (verifyingKeys as Record<string, unknown>)[functionName];
+    if (Array.isArray(nested) && typeof nested[1] === "string") {
+      return nested[1];
+    }
+  }
+
+  return undefined;
+};
+
+/**
+ * Verifies a locally generated Aleo execution proof for a subscription invoice.
+ * The proof binds the circle and tier without sending the private invoice record to the backend.
+ * The client still includes expiresAt from the locally cached invoice receipt because verify_subscription no longer exposes it publicly.
+ */
+export const verifyZKProof = async (
+  input: ZkExecutionProofInput,
+): Promise<VerifiedZkSubscriptionProof> => {
+  if (input.programId !== env.paymentProofProgramId) {
+    throw new Error(`Unexpected proof program. Expected "${env.paymentProofProgramId}".`);
+  }
+
+  if (input.transitionName !== "verify_subscription") {
+    throw new Error('Unexpected proof transition. Expected "verify_subscription".');
+  }
+
+  const circleFromPayload = input.publicInputs.circleId?.trim();
+  const expiresAtFromPayload = input.publicInputs.expiresAt;
+  const tierFromPayload = input.publicInputs.tier;
+  const latestBlockHeight = await fetchExplorerLatestBlockHeight();
+
+  if (env.proofVerificationMode === "mock") {
+    if (!circleFromPayload) {
+      throw new Error("Mock ZK verification requires the circle public input.");
+    }
+
+    const expiresAtBlock = Number(expiresAtFromPayload ?? 0);
+    const tier = Number(tierFromPayload ?? 1);
+
+    if (expiresAtBlock <= latestBlockHeight) {
+      throw new Error("Subscription invoice expired.");
+    }
+
+    return {
+      verified: true,
+      circleId: normalizeFieldLiteral(circleFromPayload),
+      currentBlock: latestBlockHeight,
+      expiresAtBlock,
+      expiresAt: approximateExpiryDateFromBlockHeights(latestBlockHeight, expiresAtBlock),
+      tier,
+    };
+  }
+
+  const sdk = await loadAleoProofSdk();
+  const execution = sdk.Execution.fromString(input.executionProof);
+  const transitions = execution.transitions();
+  if (!Array.isArray(transitions) || transitions.length !== 1) {
+    throw new Error("Expected a single-transition execution proof.");
+  }
+
+  const transition = transitions[0] as {
+    programId: () => string;
+    functionName: () => string;
+    inputs: (convertToJs: boolean) => unknown[];
+    outputs: (convertToJs: boolean) => unknown[];
+  };
+
+  if (transition.programId() !== input.programId) {
+    throw new Error(`Proof program mismatch. Expected "${input.programId}".`);
+  }
+
+  if (transition.functionName() !== input.transitionName) {
+    throw new Error(`Proof transition mismatch. Expected "${input.transitionName}".`);
+  }
+
+  let verifyingKey = input.verifyingKey?.trim();
+  let programSource = input.programSource?.trim();
+
+  if (!programSource || !verifyingKey) {
+    const networkClient = new sdk.AleoNetworkClient(env.aleoEndpoint);
+    if (!programSource) {
+      programSource = (await networkClient.getProgram(input.programId)).trim();
+    }
+
+    if (!verifyingKey && typeof networkClient.getDeploymentTransactionForProgram === "function") {
+      const deploymentTx = await networkClient.getDeploymentTransactionForProgram(input.programId);
+      verifyingKey = findVerifyingKeyInDeployment(deploymentTx, input.transitionName);
+    }
+  }
+
+  if (!programSource) {
+    throw new Error("Missing Aleo program source for proof verification.");
+  }
+
+  if (!verifyingKey) {
+    throw new Error("Missing verifying key for proof verification.");
+  }
+
+  const verified = sdk.verifyFunctionExecution(
+    execution,
+    sdk.VerifyingKey.fromString(verifyingKey),
+    sdk.Program.fromString(programSource),
+    input.transitionName,
+  );
+
+  if (!verified) {
+    throw new Error("Execution proof failed Aleo verification.");
+  }
+
+  const publicInputs = extractTransitionIoValues(transition.inputs(true));
+  const publicOutputs = extractTransitionIoValues(transition.outputs(true));
+
+  if (publicInputs.length < 2) {
+    throw new Error("Subscription proof did not expose the expected public inputs.");
+  }
+
+  const circleId = normalizeFieldLiteral(publicInputs[0]);
+  const tier = parseUnsignedLiteral(publicInputs[1], "u8");
+  const expiresAtBlock = Number(expiresAtFromPayload ?? 0);
+
+  if (publicOutputs.length < 1 || !parseBooleanLiteral(publicOutputs[0])) {
+    throw new Error("Subscription proof did not return a successful verification output.");
+  }
+
+  if (circleFromPayload && normalizeFieldLiteral(circleFromPayload) !== circleId) {
+    throw new Error("Proof circle public input mismatch.");
+  }
+
+  if (typeof expiresAtFromPayload !== "number" || !Number.isFinite(expiresAtBlock) || expiresAtBlock <= 0) {
+    throw new Error("Subscription proof is missing the invoice expiry metadata.");
+  }
+
+  if (typeof tierFromPayload === "number" && tierFromPayload !== tier) {
+    throw new Error("Proof tier public input mismatch.");
+  }
+
+  if (expiresAtBlock <= latestBlockHeight) {
+    throw new Error("Subscription invoice expired.");
+  }
+
+  return {
+    verified: true,
+    circleId,
+    currentBlock: latestBlockHeight,
+    expiresAtBlock,
+    expiresAt: approximateExpiryDateFromBlockHeights(latestBlockHeight, expiresAtBlock),
+    tier,
+  };
+};
+
+export { computeSubscriptionProofNullifier };
 
 export const verifySubscriptionProof = async (
   input: SubscriptionProofInput,
@@ -522,7 +873,7 @@ export const verifyTipPayment = async (
   }
 
   if (!input.purchaseTxId) {
-    throw new Error("Missing purchaseTxId. Expected an on-chain credits.aleo transfer_public.");
+    throw new Error("Missing purchaseTxId. Expected an on-chain credits.aleo direct transfer.");
   }
 
   const verified = await verifyDirectCreditsTransfer({

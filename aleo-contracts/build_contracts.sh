@@ -27,3 +27,10 @@ cd "$SCRIPT_DIR/tip"
 rm -rf build
 leo build 2>&1
 echo "Tip EXIT: $?"
+
+echo ""
+echo "=== Cleaning and rebuilding payment_proof ==="
+cd "$SCRIPT_DIR/payment_proof"
+rm -rf build
+leo build 2>&1
+echo "Payment proof EXIT: $?"

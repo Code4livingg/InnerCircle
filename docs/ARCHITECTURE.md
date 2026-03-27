@@ -40,7 +40,7 @@ Subscriptions are verified against on-chain payments and stored as verified purc
 
 ## Tipping System
 Tips are enforced on-chain. Public tips use `credits.aleo/transfer_public`, while anonymous tips use a private
-tip program (`tip_pay_v1_xwnxp.aleo`) that pays from private balance and proves the amount without revealing identity.
+tip program (`tip_pay_v2_xwnxp.aleo`) that pays from private balance and proves the amount without revealing identity.
 
 - Public tip: `POST /api/tips` (wallet session + `txId`)
 - Anonymous tip: `POST /api/tips/anonymous` (no session, `txId` from `tip_private`)

@@ -16,7 +16,7 @@ NETWORK="testnet"
 ENDPOINT="https://api.explorer.provable.com/v1"
 PRIORITY_FEES="100000"
 
-echo "=== Deploying ppv_pay_v2_xwnxp.aleo ==="
+echo "=== Deploying ppv_pay_v4_xwnxp.aleo ==="
 cd "$SCRIPT_DIR/ppv"
 leo deploy \
   --network "$NETWORK" \
@@ -28,7 +28,7 @@ leo deploy \
 echo "PPV deploy complete"
 
 echo ""
-echo "=== Deploying sub_pay_v3_xwnxp.aleo ==="
+echo "=== Deploying sub_pay_v5_xwnxp.aleo ==="
 cd "$SCRIPT_DIR/subscription"
 leo deploy \
   --network "$NETWORK" \
@@ -40,7 +40,7 @@ leo deploy \
 echo "Subscription deploy complete"
 
 echo ""
-echo "=== Deploying access_pass_v1_xwnxp.aleo ==="
+echo "=== Deploying access_pass_v3_xwnxp.aleo ==="
 cd "$SCRIPT_DIR/access_pass"
 leo deploy \
   --network "$NETWORK" \
@@ -52,7 +52,7 @@ leo deploy \
 echo "Access pass deploy complete"
 
 echo ""
-echo "=== Deploying tip_pay_v1_xwnxp.aleo ==="
+echo "=== Deploying tip_pay_v3_xwnxp.aleo ==="
 cd "$SCRIPT_DIR/tip"
 leo deploy \
   --network "$NETWORK" \

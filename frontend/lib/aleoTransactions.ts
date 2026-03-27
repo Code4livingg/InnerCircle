@@ -6,9 +6,12 @@ const MICROCREDITS_PER_ALEO = 1_000_000n;
 const DEFAULT_EXECUTION_FEE_ALEO = 0.25;
 const ALEO_EXPLORER_API =
   process.env.NEXT_PUBLIC_ALEO_EXPLORER_API?.trim() || "https://api.explorer.provable.com/v1";
-const ALEO_EXPLORER_NETWORK =
-  process.env.NEXT_PUBLIC_ALEO_NETWORK?.trim().toLowerCase() === "mainnet" ? "mainnet" : "testnet";
-const TIP_PROGRAM_ID = process.env.NEXT_PUBLIC_TIP_PROGRAM_ID?.trim() || "tip_pay_v1_xwnxp.aleo";
+const ALEO_EXPLORER_NETWORK = "testnet";
+const TIP_PROGRAM_ID = process.env.NEXT_PUBLIC_TIP_PROGRAM_ID?.trim() || "tip_pay_v4_xwnxp.aleo";
+const PAYMENT_PROOF_PROGRAM_ID =
+  process.env.NEXT_PUBLIC_PAYMENT_PROOF_PROGRAM_ID?.trim() || "sub_invoice_v7_xwnxp.aleo";
+const SUBSCRIPTION_PROGRAM_ID =
+  process.env.NEXT_PUBLIC_SUBSCRIPTION_PROGRAM_ID?.trim() || "sub_pay_v6_xwnxp.aleo";
 
 interface TransactionResult {
   transactionId?: string;
@@ -57,6 +60,10 @@ interface RequestExecutionLike {
   requestExecution?: (
     requestData: LegacyRawExecutionRequestData | ShieldRawExecutionRequestData,
   ) => Promise<TransactionResult | undefined>;
+}
+
+interface ExecutionReaderLike {
+  getExecution?: (transactionId: string) => Promise<unknown>;
 }
 
 interface TransactionHistoryLike {
@@ -324,10 +331,69 @@ const parseMicrocreditsValue = (
   return undefined;
 };
 
+const parseMicrocreditsLiteral = (value: string): bigint | undefined => {
+  const normalized = value.trim().replace(/\.(private|public)$/i, "").replace(/_/g, "");
+  const withU64 = /^([0-9]+)u64$/i.exec(normalized);
+  if (withU64) return BigInt(withU64[1]);
+  if (/^[0-9]+$/.test(normalized)) return BigInt(normalized);
+  return undefined;
+};
+
 const parseMicrocreditsFromRecordLiteral = (literal: string): bigint | undefined => {
-  const match = literal.match(/([0-9]+)u64/i);
-  if (!match) return undefined;
-  return BigInt(match[1]);
+  const match = literal.match(/microcredits:\s*([0-9_]+u64(?:\.(?:private|public))?)/i);
+  return match ? parseMicrocreditsLiteral(match[1]) : undefined;
+};
+
+const findNestedFieldValue = (
+  value: unknown,
+  fieldName: string,
+  depth = 0,
+): unknown => {
+  if (depth > 8 || value === null || value === undefined) return undefined;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findNestedFieldValue(item, fieldName, depth + 1);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    for (const [key, nested] of Object.entries(record)) {
+      if (key.toLowerCase() === fieldName.toLowerCase()) {
+        return nested;
+      }
+    }
+    for (const nested of Object.values(record)) {
+      const found = findNestedFieldValue(nested, fieldName, depth + 1);
+      if (found !== undefined) return found;
+    }
+  }
+
+  return undefined;
+};
+
+const parsePrivateCreditsBalance = (
+  record: unknown,
+  literal?: string,
+): bigint | undefined => {
+  if (typeof literal === "string") {
+    const parsedFromLiteral = parseMicrocreditsFromRecordLiteral(literal);
+    if (parsedFromLiteral !== undefined) {
+      return parsedFromLiteral;
+    }
+  }
+
+  const nestedMicrocredits = findNestedFieldValue(record, "microcredits");
+  if (typeof nestedMicrocredits === "string") {
+    return parseMicrocreditsLiteral(nestedMicrocredits);
+  }
+  if (typeof nestedMicrocredits === "number" || typeof nestedMicrocredits === "bigint") {
+    return parseMicrocreditsValue(nestedMicrocredits);
+  }
+
+  return undefined;
 };
 
 const extractRecordLiteral = (record: unknown): string | undefined => {
@@ -371,16 +437,27 @@ const pickPrivateCreditsRecord = async (
     throw new Error("No private credits records found. You need private balance for anonymous tips.");
   }
 
+  const candidates: Array<{ literal: string; index: number; balance: bigint }> = [];
+
   for (let i = 0; i < records.length; i += 1) {
     const record = records[i];
     const literal = extractRecordLiteral(record);
-    const balance =
-      parseMicrocreditsValue(record) ??
-      (typeof literal === "string" ? parseMicrocreditsFromRecordLiteral(literal) : undefined);
+    const balance = parsePrivateCreditsBalance(record, literal);
 
     if (literal && typeof balance === "bigint" && balance >= minMicrocredits) {
-      return { literal, index: i, balance };
+      candidates.push({ literal, index: i, balance });
     }
+  }
+
+  candidates.sort((left, right) => {
+    if (left.balance === right.balance) {
+      return left.index - right.index;
+    }
+    return right.balance > left.balance ? 1 : -1;
+  });
+
+  if (candidates.length > 0) {
+    return candidates[0];
   }
 
   throw new Error("No private credits record large enough for this tip amount.");
@@ -420,7 +497,7 @@ const fetchExplorerPublicBalanceMicrocredits = async (address: string): Promise<
   return undefined;
 };
 
-const fetchKnownPublicBalanceMicrocredits = async (
+export const fetchKnownPublicBalanceMicrocredits = async (
   address: string,
 ): Promise<bigint | undefined> => {
   if (!address || !address.startsWith("aleo1")) return undefined;
@@ -524,7 +601,13 @@ export const fetchLatestBlockHeight = async (): Promise<bigint> => {
 export const fetchLatestBlockHeightField = async (): Promise<string> =>
   toFieldFromInteger(await fetchLatestBlockHeight());
 
-const validateLiteralInputs = (functionName: string, inputs: string[]): void => {
+const isAleoRecordInput = (value: string): boolean =>
+  /^record1[0-9a-z]+$/i.test(value) || (value.includes("owner:") && value.includes("microcredits:"));
+
+const isLegacySubscriptionInvoiceProgram = (programId: string): boolean =>
+  /^sub_invoice_v2_xwnxp\.aleo$/i.test(programId.trim());
+
+const validateLiteralInputs = (programId: string, functionName: string, inputs: string[]): void => {
   const normalized = inputs.map((value) => value.trim());
 
   for (const value of normalized) {
@@ -534,18 +617,46 @@ const validateLiteralInputs = (functionName: string, inputs: string[]): void => 
   }
 
   if (functionName === "pay_and_subscribe") {
-    if (normalized.length !== 3) {
-      throw new Error(`pay_and_subscribe expects 3 inputs, received ${normalized.length}.`);
+    if (isLegacySubscriptionInvoiceProgram(programId)) {
+      if (normalized.length !== 4) {
+        throw new Error(`pay_and_subscribe expects 4 inputs, received ${normalized.length}.`);
+      }
+      if (!isAleoRecordInput(normalized[0])) {
+        throw new Error("pay_and_subscribe private payment record is missing or malformed.");
+      }
+      if (!isFieldLiteral(normalized[1])) {
+        throw new Error(`pay_and_subscribe circle_id must be a field literal, got "${normalized[1]}".`);
+      }
+      if (!isU64Literal(normalized[2])) {
+        throw new Error(`pay_and_subscribe amount must be a u64 literal, got "${normalized[2]}".`);
+      }
+      if (!/^(\d+)u32$/i.test(normalized[3])) {
+        throw new Error(`pay_and_subscribe expiry block must be a u32 literal, got "${normalized[3]}".`);
+      }
+      return;
     }
-    if (!isFieldLiteral(normalized[0])) {
-      throw new Error(`pay_and_subscribe creator_id must be a field literal, got "${normalized[0]}".`);
+    if (normalized.length !== 6) {
+      throw new Error(`pay_and_subscribe expects 6 inputs, received ${normalized.length}.`);
     }
-    if (!/^aleo1[0-9a-z]+$/i.test(normalized[1])) {
-      throw new Error(`pay_and_subscribe creator_address must be an aleo1 address, got "${normalized[1]}".`);
+    if (!isAleoRecordInput(normalized[0])) {
+      throw new Error("pay_and_subscribe private payment record is missing or malformed.");
+    }
+    if (!isFieldLiteral(normalized[1])) {
+      throw new Error(`pay_and_subscribe circle_id must be a field literal, got "${normalized[1]}".`);
     }
     if (!isU64Literal(normalized[2])) {
       throw new Error(`pay_and_subscribe amount must be a u64 literal, got "${normalized[2]}".`);
     }
+    if (!/^(\d+)u32$/i.test(normalized[3])) {
+      throw new Error(`pay_and_subscribe expiry block must be a u32 literal, got "${normalized[3]}".`);
+    }
+    if (!isFieldLiteral(normalized[4])) {
+      throw new Error(`pay_and_subscribe salt must be a field literal, got "${normalized[4]}".`);
+    }
+    if (!/^aleo1[0-9a-z]+$/i.test(normalized[5])) {
+      throw new Error(`pay_and_subscribe creator_address must be an aleo1 address, got "${normalized[5]}".`);
+    }
+    return;
   }
 
   if (functionName === "pay_and_subscribe_v2") {
@@ -564,6 +675,43 @@ const validateLiteralInputs = (functionName: string, inputs: string[]): void => 
     if (!isFieldLiteral(normalized[3])) {
       throw new Error(`pay_and_subscribe_v2 expiry must be a field literal, got "${normalized[3]}".`);
     }
+  }
+
+  if (functionName === "pay_and_subscribe_public") {
+    if (isLegacySubscriptionInvoiceProgram(programId)) {
+      if (normalized.length !== 3) {
+        throw new Error(`pay_and_subscribe_public expects 3 inputs, received ${normalized.length}.`);
+      }
+      if (!isFieldLiteral(normalized[0])) {
+        throw new Error(`pay_and_subscribe_public circle_id must be a field literal, got "${normalized[0]}".`);
+      }
+      if (!isU64Literal(normalized[1])) {
+        throw new Error(`pay_and_subscribe_public amount must be a u64 literal, got "${normalized[1]}".`);
+      }
+      if (!/^(\d+)u32$/i.test(normalized[2])) {
+        throw new Error(`pay_and_subscribe_public expiry block must be a u32 literal, got "${normalized[2]}".`);
+      }
+      return;
+    }
+    if (normalized.length !== 5) {
+      throw new Error(`pay_and_subscribe_public expects 5 inputs, received ${normalized.length}.`);
+    }
+    if (!isFieldLiteral(normalized[0])) {
+      throw new Error(`pay_and_subscribe_public circle_id must be a field literal, got "${normalized[0]}".`);
+    }
+    if (!isU64Literal(normalized[1])) {
+      throw new Error(`pay_and_subscribe_public amount must be a u64 literal, got "${normalized[1]}".`);
+    }
+    if (!/^(\d+)u32$/i.test(normalized[2])) {
+      throw new Error(`pay_and_subscribe_public expiry block must be a u32 literal, got "${normalized[2]}".`);
+    }
+    if (!isFieldLiteral(normalized[3])) {
+      throw new Error(`pay_and_subscribe_public salt must be a field literal, got "${normalized[3]}".`);
+    }
+    if (!/^aleo1[0-9a-z]+$/i.test(normalized[4])) {
+      throw new Error(`pay_and_subscribe_public creator_address must be an aleo1 address, got "${normalized[4]}".`);
+    }
+    return;
   }
 
   if (functionName === "prove_subscription_v2") {
@@ -589,6 +737,23 @@ const validateLiteralInputs = (functionName: string, inputs: string[]): void => 
       throw new Error(`transfer_public amount must be a u64 literal, got "${normalized[1]}".`);
     }
   }
+
+  if (functionName === "transfer_private_to_public") {
+    if (normalized.length !== 3) {
+      throw new Error(`transfer_private_to_public expects 3 inputs, received ${normalized.length}.`);
+    }
+    if (!isAleoRecordInput(normalized[0])) {
+      throw new Error("transfer_private_to_public private payment record is missing or malformed.");
+    }
+    if (!/^aleo1[0-9a-z]+$/i.test(normalized[1])) {
+      throw new Error(`transfer_private_to_public recipient must be an aleo1 address, got "${normalized[1]}".`);
+    }
+    if (!isU64Literal(normalized[2])) {
+      throw new Error(`transfer_private_to_public amount must be a u64 literal, got "${normalized[2]}".`);
+    }
+    return;
+  }
+
 };
 
 const getWalletAdapterName = (wallet: WalletContextState): string =>
@@ -602,6 +767,30 @@ const isPuzzleWallet = (wallet: WalletContextState): boolean =>
 
 const isLeoWallet = (wallet: WalletContextState): boolean =>
   getWalletAdapterName(wallet).includes("leo");
+
+const assertNoManualRecordForPublicExecution = (
+  programId: string,
+  functionName: string,
+  inputs: string[],
+  recordIndices?: number[],
+): void => {
+  if (functionName !== "pay_and_subscribe_public") {
+    return;
+  }
+
+  if (Array.isArray(recordIndices) && recordIndices.length > 0) {
+    throw new Error(
+      `Do not pass record indices to ${programId}/${functionName}. This public transition must spend the signer's public balance automatically.`,
+    );
+  }
+
+  const manualRecordInput = inputs.find((input) => isAleoRecordInput(input));
+  if (manualRecordInput) {
+    throw new Error(
+      `Do not pass a credits record to ${programId}/${functionName}. Use only typed public inputs so the wallet selects funds from the signer automatically.`,
+    );
+  }
+};
 
 const withWalletDefaults = <T extends CompatibleTransactionOptions>(wallet: WalletContextState, tx: T): T => {
   // Keep wallet defaults unless explicitly overridden by caller.
@@ -620,8 +809,8 @@ const preferRawExecutionApi = (wallet: WalletContextState): boolean => {
   return name.includes("leo");
 };
 
-const toLeoChainId = (network: WalletContextState["network"]): string =>
-  network === Network.MAINNET ? "mainnet" : "testnetbeta";
+const toLeoChainId = (_network: WalletContextState["network"]): string =>
+  "testnetbeta";
 
 const getRawExecutionWallets = (wallet: WalletContextState): RequestExecutionLike[] => {
   const out: RequestExecutionLike[] = [];
@@ -665,6 +854,192 @@ const getRawExecutionWallets = (wallet: WalletContextState): RequestExecutionLik
   }
 
   return out;
+};
+
+const getExecutionReaders = (wallet: WalletContextState): ExecutionReaderLike[] => {
+  const out: ExecutionReaderLike[] = [];
+  const seen = new Set<object>();
+
+  const add = (candidate: unknown): void => {
+    if (!candidate || typeof candidate !== "object") return;
+    const casted = candidate as ExecutionReaderLike;
+    if (typeof casted.getExecution !== "function") {
+      return;
+    }
+    const ref = candidate as object;
+    if (seen.has(ref)) return;
+    seen.add(ref);
+    out.push(casted);
+  };
+
+  add(wallet as unknown as ExecutionReaderLike);
+  add(wallet.wallet?.adapter as unknown as ExecutionReaderLike);
+
+  for (const raw of getRawExecutionWallets(wallet)) {
+    add(raw as unknown as ExecutionReaderLike);
+  }
+
+  return out;
+};
+
+const normalizeExecutionTranscript = (value: unknown): string | undefined => {
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value.trim();
+  }
+
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const directKeys = ["execution", "executionProof", "proof"];
+  for (const key of directKeys) {
+    const candidate = record[key];
+    if (typeof candidate === "string" && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+
+  for (const key of ["result", "data", "payload"]) {
+    const nested = record[key];
+    if (!nested || typeof nested !== "object") continue;
+    for (const nestedKey of directKeys) {
+      const candidate = (nested as Record<string, unknown>)[nestedKey];
+      if (typeof candidate === "string" && candidate.trim().length > 0) {
+        return candidate.trim();
+      }
+    }
+  }
+
+  return undefined;
+};
+
+const isExecutionTranscriptUnsupportedError = (error: unknown): boolean => {
+  const message = (error as Error)?.message?.toLowerCase() ?? "";
+  return (
+    message.includes("invalid_params") ||
+    message.includes("invalid params") ||
+    message.includes("wallet did not expose the execution transcript")
+  );
+};
+
+export const getExecutionFromWallet = async (
+  wallet: WalletContextState,
+  transactionIds: string[],
+): Promise<string> => {
+  const readers = getExecutionReaders(wallet);
+  if (readers.length === 0) {
+    throw new Error("Connected wallet does not expose getExecution for subscription proof retrieval.");
+  }
+
+  let lastError: unknown;
+  for (const transactionId of transactionIds) {
+    if (!transactionId) continue;
+    for (const reader of readers) {
+      if (typeof reader.getExecution !== "function") continue;
+      try {
+        const execution = normalizeExecutionTranscript(await reader.getExecution(transactionId));
+        if (execution) {
+          return execution;
+        }
+      } catch (error) {
+        lastError = error;
+      }
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Wallet did not expose the execution transcript for the subscription proof transaction.");
+};
+
+export const waitForTransactionFinality = async (
+  txId: string,
+  timeoutMs = 90_000,
+  intervalMs = 5_000,
+): Promise<unknown> => {
+  const explorerUrl = `${ALEO_EXPLORER_API}/${ALEO_EXPLORER_NETWORK}/transaction/${txId}`;
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(explorerUrl);
+      if (response.ok) {
+        const payload = await response.json();
+        console.log("[InnerCircle] Transaction finalized:", txId);
+        return payload;
+      }
+
+      if (response.status === 404) {
+        console.log("[InnerCircle] Tx not indexed yet, retrying in 5s...");
+      }
+    } catch (error) {
+      console.log("[InnerCircle] Explorer fetch error, retrying...", error);
+    }
+
+    await wait(intervalMs);
+  }
+
+  throw new Error(
+    `Transaction ${txId} not finalized after ${Math.floor(timeoutMs / 1000)}s. It may still confirm - check explorer manually.`,
+  );
+};
+
+export const waitForExecutionTranscript = async (
+  wallet: WalletContextState,
+  txId: string,
+  timeoutMs = 90_000,
+  intervalMs = 5_000,
+): Promise<string | null> => {
+  const explorerUrl = `${ALEO_EXPLORER_API}/${ALEO_EXPLORER_NETWORK}/transaction/${txId}`;
+  const deadline = Date.now() + timeoutMs;
+  let walletTranscriptUnsupported = false;
+
+  while (Date.now() < deadline) {
+    if (!walletTranscriptUnsupported) {
+      try {
+        const transcript = await getExecutionFromWallet(wallet, [txId]);
+        if (transcript) {
+          console.log("[InnerCircle] Got execution transcript from wallet");
+          return transcript;
+        }
+      } catch (error) {
+        if (isExecutionTranscriptUnsupportedError(error)) {
+          walletTranscriptUnsupported = true;
+          console.warn("[InnerCircle] Wallet transcript API is unsupported for this transaction. Falling back to tx verification.");
+        } else if (process.env.NODE_ENV !== "production") {
+          console.log("[InnerCircle] Transcript not ready, retrying...", error);
+        }
+      }
+    }
+
+    try {
+      const response = await fetch(explorerUrl);
+      if (response.ok) {
+        const data = await response.json();
+        const execution =
+          (typeof data?.execution === "string" ? data.execution : null) ??
+          (typeof data?.transaction?.execution === "string" ? data.transaction.execution : null) ??
+          null;
+        if (execution) {
+          console.log("[InnerCircle] Got execution transcript from explorer");
+          return execution;
+        }
+      }
+    } catch (error) {
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[InnerCircle] Transcript not ready, retrying...", error);
+      }
+    }
+
+    if (walletTranscriptUnsupported) {
+      return null;
+    }
+
+    await wait(intervalMs);
+  }
+
+  return null;
 };
 
 const requestExecutionViaRawWallet = async (
@@ -1391,11 +1766,13 @@ const uniqueStrings = (values: string[]): string[] => {
   return out;
 };
 
-const DEFAULT_HISTORY_PROGRAM_IDS = [
+const DEFAULT_HISTORY_PROGRAM_IDS = uniqueStrings([
   "credits.aleo",
-  "creator_reg_v2_xwnxp.aleo",
+  "creator_reg_v5_xwnxp.aleo",
+  PAYMENT_PROOF_PROGRAM_ID,
+  SUBSCRIPTION_PROGRAM_ID,
   TIP_PROGRAM_ID,
-];
+]);
 
 export const resolveChainTxIdFromHistory = async (
   wallet: WalletContextState,
@@ -1773,6 +2150,9 @@ interface ExecuteProgramTxInput {
   privateFee?: boolean;
   feePreference?: FeePreference;
   recordIndices?: number[];
+  // Lock the signer address for flows that must abort if the wallet account
+  // changes between preparation and submission.
+  signerAddress?: string;
 }
 
 export const executeProgramTransaction = async ({
@@ -1784,9 +2164,14 @@ export const executeProgramTransaction = async ({
   privateFee = false,
   feePreference = "auto",
   recordIndices,
+  signerAddress,
 }: ExecuteProgramTxInput): Promise<string> => {
-  if (!wallet.address || !wallet.address.startsWith("aleo1")) {
+  const activeAddress = wallet.address?.trim();
+  if (!activeAddress || !activeAddress.startsWith("aleo1")) {
     throw new Error("Wallet is not connected to a valid Aleo address.");
+  }
+  if (signerAddress && activeAddress.toLowerCase() !== signerAddress.trim().toLowerCase()) {
+    throw new Error("SIGNER_CHANGED");
   }
 
   const adapterName = getWalletAdapterName(wallet);
@@ -1804,7 +2189,8 @@ export const executeProgramTransaction = async ({
     feePreference,
   );
 
-  validateLiteralInputs(functionName, inputs);
+  validateLiteralInputs(programId, functionName, inputs);
+  assertNoManualRecordForPublicExecution(programId, functionName, inputs, recordIndices);
 
   const submitWithCompatibility = async (): Promise<string> => {
     let lastAttemptError: unknown;
@@ -1910,19 +2296,36 @@ export const executeCreditsTransfer = async ({
 
   const literalInputs = [normalizedRecipient, amountInput];
   const executionFeeMicrocredits = aleoToMicrocredits(feeAleo);
+  const requiredPublicBalance = transferAmount + executionFeeMicrocredits;
+
+  const submitPrivateToPublicFallback = async (): Promise<string> => {
+    const record = await pickPrivateCreditsRecord(wallet, transferAmount);
+    return executeProgramTransaction({
+      wallet,
+      programId: "credits.aleo",
+      functionName: "transfer_private_to_public",
+      inputs: [record.literal, normalizedRecipient, amountInput],
+      feeAleo,
+      feePreference,
+      recordIndices: typeof record.index === "number" ? [record.index] : undefined,
+    });
+  };
 
   // Balance check
   const publicBalance = await fetchKnownPublicBalanceMicrocredits(wallet.address);
   if (publicBalance !== undefined) {
-    const required = transferAmount + executionFeeMicrocredits;
-    if (publicBalance < required) {
-      throw new Error(
-        `Insufficient public balance. Required at least ${microcreditsToAleoString(required)} ALEO (${required.toString()} microcredits), but wallet has ${microcreditsToAleoString(publicBalance)} ALEO public balance.`,
-      );
+    if (publicBalance < requiredPublicBalance) {
+      try {
+        return await submitPrivateToPublicFallback();
+      } catch (privateFallbackError) {
+        throw new Error(
+          `Insufficient public balance. Required at least ${microcreditsToAleoString(requiredPublicBalance)} ALEO (${requiredPublicBalance.toString()} microcredits), but wallet has ${microcreditsToAleoString(publicBalance)} ALEO public balance. Private transfer fallback also failed: ${(privateFallbackError as Error).message ?? "Unknown error."}`,
+        );
+      }
     }
   }
 
-  validateLiteralInputs("transfer_public", literalInputs);
+  validateLiteralInputs("credits.aleo", "transfer_public", literalInputs);
 
   const adapterName = getWalletAdapterName(wallet);
   const isShield = adapterName.toLowerCase().includes("shield");
@@ -2005,6 +2408,20 @@ export const executeCreditsTransfer = async ({
     const msg = ((error as Error).message ?? "").toLowerCase();
     if (isUserRejectedError(error)) {
       throw error;
+    }
+
+    if (
+      msg.includes("insufficient public balance") ||
+      msg.includes("insufficient funds") ||
+      msg.includes("not enough balance")
+    ) {
+      try {
+        return await submitPrivateToPublicFallback();
+      } catch (privateFallbackError) {
+        throw new Error(
+          `Payment failed from public balance, and private transfer fallback also failed: ${(privateFallbackError as Error).message ?? "Unknown error."}`,
+        );
+      }
     }
 
     if (isShield && msg.includes("not in the allowed programs")) {

@@ -3,6 +3,8 @@ import { Playfair_Display, Inter } from "next/font/google";
 import "./globals.css";
 import { WalletProviders } from "../components/WalletProviders";
 import { Navbar } from "../components/Navbar";
+import { RuntimeChecks } from "../components/RuntimeChecks";
+import { LenisProvider } from "../components/LenisProvider";
 
 const playfair = Playfair_Display({
   subsets: ["latin"],
@@ -29,12 +31,15 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${playfair.variable} ${inter.variable}`}>
       <body>
-        <WalletProviders>
-          <Navbar />
-          <div className="page-shell">
-            {children}
-          </div>
-        </WalletProviders>
+        <RuntimeChecks />
+        <LenisProvider>
+          <WalletProviders>
+            <Navbar />
+            <div className="page-shell">
+              {children}
+            </div>
+          </WalletProviders>
+        </LenisProvider>
       </body>
     </html>
   );

@@ -5,7 +5,7 @@ import { DynamicWatermark } from "./DynamicWatermark";
 
 interface StreamingPlayerWatermark {
   fingerprint: string;
-  shortWallet: string;
+  viewerLabel: string;
   sessionId: string;
 }
 
@@ -92,7 +92,7 @@ export function StreamingPlayer({ src, mimeType, title, watermark }: StreamingPl
     <DynamicWatermark
       key={overlayNonce}
       fingerprint={watermark.fingerprint}
-      shortWallet={watermark.shortWallet}
+      viewerLabel={watermark.viewerLabel}
       sessionId={watermark.sessionId}
     />
   ) : null;

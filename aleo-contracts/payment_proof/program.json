@@ -1,0 +1,22 @@
+{
+  "program": "sub_invoice_v7_xwnxp.aleo",
+  "version": "0.1.0",
+  "description": "Private subscription invoice program for ZK subscription proofs.",
+  "license": "MIT",
+  "leo": "3.5.0",
+  "dependencies": [
+    {
+      "name": "credits.aleo",
+      "location": "network",
+      "path": null,
+      "edition": null
+    },
+    {
+      "name": "test_usdcx_stablecoin.aleo",
+      "location": "network",
+      "path": null,
+      "edition": null
+    }
+  ],
+  "dev_dependencies": null
+}

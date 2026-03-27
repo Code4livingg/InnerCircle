@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useWallet } from "@/lib/walletContext";
+import { AnonymousToggle } from "@/features/anonymous/AnonymousToggle";
 import { WalletConnectButton } from "./WalletConnectButton";
 import { getWalletRole, syncWalletRoleFromBackend, type AppRole } from "../lib/walletRole";
 
@@ -13,20 +14,26 @@ export function Navbar() {
 
     const [role, setRole] = useState<AppRole | null>(null);
     const [menuOpen, setMenuOpen] = useState(false);
+    const [scrolled, setScrolled] = useState(false);
 
+    // Sync wallet role
     useEffect(() => {
         if (!connected || !address) {
             setRole(getWalletRole(null));
             return;
         }
-
         setRole(getWalletRole(address));
         void syncWalletRoleFromBackend(address)
-            .then((remoteRole) => {
-                setRole(remoteRole);
-            })
+            .then((remoteRole) => { setRole(remoteRole); })
             .catch(() => undefined);
     }, [address, connected, pathname]);
+
+    // Show frosted glass after scrolling past the hero
+    useEffect(() => {
+        const onScroll = () => setScrolled(window.scrollY > 80);
+        window.addEventListener("scroll", onScroll, { passive: true });
+        return () => window.removeEventListener("scroll", onScroll);
+    }, []);
 
     const userLinks = [
         { href: "/discover", label: "Discover" },
@@ -42,7 +49,7 @@ export function Navbar() {
     const isLanding = pathname === "/" || pathname === "/wallet" || pathname === "/role";
 
     return (
-        <nav className={`navbar${isLanding ? " navbar--landing" : ""}`}>
+        <nav className={`navbar${isLanding ? " navbar--landing" : ""}${isLanding && scrolled ? " is-scrolled" : ""}`}>
             <div className="navbar__inner">
                 <Link href="/" className="navbar__logo">
                     {isLanding ? (
@@ -68,6 +75,7 @@ export function Navbar() {
                 )}
 
                 <div className="navbar__right">
+                    <AnonymousToggle />
                     <WalletConnectButton />
                     {role && (
                         <Link

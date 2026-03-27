@@ -6,7 +6,7 @@ type WatermarkPosition = "top-left" | "top-right" | "bottom-left" | "bottom-righ
 
 interface DynamicWatermarkProps {
   fingerprint: string;
-  shortWallet: string;
+  viewerLabel: string;
   sessionId: string;
 }
 
@@ -25,7 +25,7 @@ const positionClasses: Record<WatermarkPosition, string> = {
   center: "left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2",
 };
 
-export function DynamicWatermark({ fingerprint, shortWallet, sessionId }: DynamicWatermarkProps) {
+export function DynamicWatermark({ fingerprint, viewerLabel, sessionId }: DynamicWatermarkProps) {
   const [position, setPosition] = useState<WatermarkPosition>("top-right");
 
   useEffect(() => {
@@ -45,7 +45,7 @@ export function DynamicWatermark({ fingerprint, shortWallet, sessionId }: Dynami
       aria-hidden="true"
     >
       <p>viewer: {fingerprint}</p>
-      <p>wallet: {shortWallet}</p>
+      <p>identity: {viewerLabel}</p>
       <p>session: {sessionId}</p>
     </div>
   );

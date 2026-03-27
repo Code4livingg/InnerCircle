@@ -5,8 +5,10 @@ import { use, useEffect, useState } from "react";
 import { Network } from "@provablehq/aleo-types";
 import { LiveStreamPlayer } from "@/components/LiveStreamPlayer";
 import { WalletConnectButton } from "@/components/WalletConnectButton";
+import { useAnonymousMode } from "@/features/anonymous/useAnonymousMode";
 import {
   fetchLiveStreamById,
+  fetchCreatorMessagingKey,
   type LiveStream,
   verifyLiveStreamPurchase,
 } from "@/lib/api";
@@ -16,6 +18,7 @@ import {
 } from "@/lib/aleoTransactions";
 import { useWallet } from "@/lib/walletContext";
 import { getWalletSessionToken } from "@/lib/walletSession";
+import { PrivateCommentComposer } from "@/features/liveComments/PrivateCommentComposer";
 
 interface LiveStreamPageProps {
   params: Promise<{ liveStreamId: string }>;
@@ -44,6 +47,7 @@ export default function LiveStreamPage({ params }: LiveStreamPageProps) {
   const { liveStreamId } = use(params);
   const wallet = useWallet();
   const { connected, address, network } = wallet;
+  const { enabled: anonEnabled } = useAnonymousMode();
   const [liveStream, setLiveStream] = useState<LiveStream | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -52,6 +56,7 @@ export default function LiveStreamPage({ params }: LiveStreamPageProps) {
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
   const [purchaseTxId, setPurchaseTxId] = useState<string | null>(null);
   const [playerNonce, setPlayerNonce] = useState(0);
+  const [creatorPublicKey, setCreatorPublicKey] = useState<string | null>(null);
 
   useEffect(() => {
     const hydrateLiveStream = async () => {
@@ -77,7 +82,18 @@ export default function LiveStreamPage({ params }: LiveStreamPageProps) {
     };
 
     void hydrateLiveStream();
-  }, [address, connected, liveStreamId, wallet]);
+  }, [address, connected, liveStreamId]);
+
+  useEffect(() => {
+    if (!liveStream?.creatorId) {
+      setCreatorPublicKey(null);
+      return;
+    }
+
+    fetchCreatorMessagingKey(liveStream.creatorId)
+      .then((data) => setCreatorPublicKey(data.publicKeyB64))
+      .catch(() => setCreatorPublicKey(null));
+  }, [liveStream]);
 
   const ensureWalletConnected = async (): Promise<void> => {
     if (!connected || !address) {
@@ -189,8 +205,8 @@ export default function LiveStreamPage({ params }: LiveStreamPageProps) {
 
   return (
     <main className="disc-page">
-      <div className="disc-container stack stack-5" style={{ paddingTop: "var(--s5)" }}>
-        <div className="stack stack-2">
+      <div className="disc-container stack stack-5" style={{ maxWidth: 1180, paddingTop: "var(--s5)" }}>
+        <div className="stack stack-2" style={{ maxWidth: 860 }}>
           <Link
             href="/discover"
             className="t-xs t-dim btn btn--ghost btn--sm"
@@ -198,21 +214,37 @@ export default function LiveStreamPage({ params }: LiveStreamPageProps) {
           >
             Back to discover
           </Link>
-          <h1 style={{ fontSize: "clamp(2.25rem, 5vw, 3.5rem)" }}>{liveStream.title}</h1>
-          <p className="t-sm t-muted">
+          <h1 style={{ fontSize: "clamp(1.9rem, 4vw, 2.8rem)", lineHeight: 1.05 }}>{liveStream.title}</h1>
+          <p className="t-sm t-muted" style={{ fontSize: "0.98rem" }}>
             @{liveStream.creator.handle} -{" "}
             {liveStream.accessType === "PPV"
               ? `${formatCredits(liveStream.ppvPriceMicrocredits)} pay-per-view`
               : `Subscription access - ${formatCredits(liveStream.creator.subscriptionPriceMicrocredits)}/month`}
           </p>
+          <div className="row row-2" style={{ flexWrap: "wrap" }}>
+            <span className="badge badge--secure">End-to-End Encrypted</span>
+            <span className="badge badge--secure">Creator-Only Messages</span>
+            {anonEnabled ? <span className="badge badge--neutral">Anonymous Mode ON</span> : null}
+          </div>
         </div>
 
-        <LiveStreamPlayer
-          key={`${liveStream.id}:${playerNonce}`}
-          liveStreamId={liveStream.id}
-          onAccessDenied={setAccessError}
-          onReady={() => setAccessError(null)}
-        />
+        <section
+          className="card card--panel stack stack-3"
+          style={{
+            padding: "clamp(1rem, 2vw, 1.35rem)",
+            borderRadius: 28,
+            background: "linear-gradient(180deg, rgba(15,15,17,0.94), rgba(15,15,17,0.72))",
+          }}
+        >
+          <LiveStreamPlayer
+            key={`${liveStream.id}:${playerNonce}`}
+            liveStreamId={liveStream.id}
+            onAccessDenied={setAccessError}
+            onReady={() => setAccessError(null)}
+          />
+        </section>
+
+        <PrivateCommentComposer liveStreamId={liveStream.id} creatorPublicKeyB64={creatorPublicKey} />
 
         <div className="card card--panel">
           <p className="t-xs t-dim">

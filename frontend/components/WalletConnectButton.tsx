@@ -2,6 +2,8 @@
 
 import { Network } from "@provablehq/aleo-types";
 import { useWallet } from "@/lib/walletContext";
+import { useAnonymousMode } from "@/features/anonymous/useAnonymousMode";
+import { displayIdentity } from "@/features/anonymous/identity";
 import {
   WalletName,
   WalletReadyState,
@@ -38,9 +40,6 @@ const isExpiredSessionError = (error: unknown): boolean =>
   /dapp not connected|connection expired|session expired|invalid connect payload/i.test(
     readErrorMessage(error),
   );
-
-const shortenAddress = (value: string): string =>
-  value.length > 18 ? `${value.slice(0, 12)}...${value.slice(-6)}` : value;
 
 const readyStateLabel = (state: WalletReadyState): string => {
   if (state === WalletReadyState.INSTALLED) return "Installed";
@@ -80,7 +79,6 @@ export function WalletConnectButton() {
   const {
     wallets,
     wallet,
-    address,
     connected,
     connecting,
     disconnecting,
@@ -93,6 +91,8 @@ export function WalletConnectButton() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [pendingWalletName, setPendingWalletName] = useState<WalletName | null>(null);
+  const { enabled: anonEnabled, sessionId: anonSessionId } = useAnonymousMode();
+  const identityLabel = displayIdentity({ anonymousMode: anonEnabled, sessionId: anonSessionId, fallback: "Wallet Connected" });
 
   const sortedWallets = useMemo(() => {
     const priority = (state: WalletReadyState): number => {
@@ -214,13 +214,26 @@ export function WalletConnectButton() {
       {/* -- Main trigger button -- */}
       <button
         type="button"
-        className={`wallet-connect__trigger btn btn--primary${connected ? " wallet-connect__trigger--connected" : ""}`}
+        className={`wcb-btn${connected ? " wcb-btn--connected" : ""}`}
         onClick={() => { void handleMainClick(); }}
         disabled={connecting || disconnecting}
       >
-        {/* Show selected wallet icon when one is chosen but not yet connected */}
+        {/* Shield wallet icon when selected but not connected */}
         {!connected && selectedIcon && (
-          <WalletIcon name={selectedName ?? ""} icon={selectedIcon} size={18} />
+          <WalletIcon name={selectedName ?? ""} icon={selectedIcon} size={16} />
+        )}
+        {/* Lock icon when no wallet selected yet */}
+        {!connected && !selectedIcon && (
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2" />
+            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+          </svg>
+        )}
+        {/* Connected checkmark icon */}
+        {connected && (
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
         )}
         <span>
           {disconnecting
@@ -228,14 +241,14 @@ export function WalletConnectButton() {
             : connecting
               ? "Connecting..."
               : connected
-                ? "Disconnect Wallet"
+                ? identityLabel
                 : selectedName
                   ? `Connect ${selectedName}`
                   : "Connect Wallet"}
         </span>
         {/* Chevron to open picker when no wallet yet selected */}
         {!connected && !wallet && (
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ marginLeft: 4 }}>
+          <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ opacity: 0.7 }}>
             <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         )}
@@ -257,8 +270,8 @@ export function WalletConnectButton() {
       )}
 
       {/* -- Connected address pill -- */}
-      {connected && address && (
-        <p className="wallet-connect__address">{shortenAddress(address)}</p>
+      {connected && (
+        <p className="wallet-connect__address">{identityLabel}</p>
       )}
 
       {/* -- Wallet picker dropdown -- */}

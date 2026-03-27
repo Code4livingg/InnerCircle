@@ -39,12 +39,15 @@ export const getFeed = async (req: Request, res: Response): Promise<void> => {
       take: 24,
       select: {
         id: true,
+        walletAddress: true,
         creatorFieldId: true,
         handle: true,
         displayName: true,
         bio: true,
         avatarObjectKey: true,
         subscriptionPriceMicrocredits: true,
+        acceptedPaymentAssets: true,
+        acceptedPaymentVisibilities: true,
         isVerified: true,
         createdAt: true,
         _count: {
@@ -78,6 +81,29 @@ export const getFeed = async (req: Request, res: Response): Promise<void> => {
       },
     });
 
+    const ppvContents = await prisma.content.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 24,
+      where: {
+        isPublished: true,
+        accessType: "PPV",
+      },
+      select: {
+        id: true,
+        contentFieldId: true,
+        title: true,
+        description: true,
+        kind: true,
+        accessType: true,
+        ppvPriceMicrocredits: true,
+        thumbObjectKey: true,
+        createdAt: true,
+        creator: {
+          select: { handle: true, displayName: true, creatorFieldId: true, isVerified: true },
+        },
+      },
+    });
+
     const serializedCreators = creators.map((creator) => serializeCreator(creator));
     const recommendedCreators = fanProfile
       ? serializedCreators
@@ -94,6 +120,7 @@ export const getFeed = async (req: Request, res: Response): Promise<void> => {
     res.json({
       creators: serializedCreators,
       contents,
+      ppvContents,
       recommendedCreators,
       fanBudgetMicrocredits: fanProfile?.monthlyBudgetMicrocredits.toString() ?? null,
     });
@@ -147,7 +174,7 @@ export const search = async (req: Request, res: Response): Promise<void> => {
     const contents = await prisma.content.findMany({
       where: {
         isPublished: true,
-        accessType: "PUBLIC",
+        accessType: { in: ["PUBLIC", "PPV"] },
         OR: [{ title: { contains: q, mode: "insensitive" } }, { description: { contains: q, mode: "insensitive" } }],
       },
       take: 20,

@@ -250,7 +250,9 @@ export const getCreatorTipHistory = async (req: WalletSessionRequest, res: Respo
         amountMicrocredits: tip.amountMicrocredits.toString(),
         message: tip.message,
         isAnonymous: tip.isAnonymous,
-        supporter: tip.isAnonymous ? "Anonymous" : shortHash(tip.walletHash),
+        // Keep the response shape stable, but stop exposing any identifier that
+        // lets creators correlate repeated viewers across sessions.
+        supporter: tip.isAnonymous ? "Anonymous" : "Supporter",
         createdAt: tip.createdAt.toISOString(),
       })),
     });
@@ -322,7 +324,9 @@ export const getTipLeaderboard = async (req: WalletSessionRequest, res: Response
 
     res.json({
       supporters: topSupporters.map((row) => ({
-        supporter: shortHash(row.walletHash),
+        // Rank-only output preserves dashboard functionality without exposing a
+        // stable supporter fingerprint to creators.
+        supporter: "Supporter",
         tipCount: row._count._all,
         totalMicrocredits: (row._sum.amountMicrocredits ?? 0n).toString(),
       })),

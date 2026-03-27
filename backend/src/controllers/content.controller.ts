@@ -20,11 +20,17 @@ const uploadSchema = z.object({
   ppvPriceMicrocredits: z.coerce.bigint().nonnegative().optional().default(0n),
   subscriptionTierId: z.string().uuid().optional(),
   isPublished: z.coerce.boolean().optional().default(false),
+  expiresAt: z.string().datetime().optional(),
+  viewLimit: z.coerce.number().int().positive().optional(),
+  encryptedData: z.string().optional(),
 });
 
 const updateSchema = z.object({
   subscriptionTierId: z.string().uuid().nullable().optional(),
   isPublished: z.coerce.boolean().optional(),
+  expiresAt: z.string().datetime().nullable().optional(),
+  viewLimit: z.coerce.number().int().positive().nullable().optional(),
+  encryptedData: z.string().nullable().optional(),
 });
 
 const walletHash = (address: string): string => sha256Hex(address.toLowerCase());
@@ -161,6 +167,10 @@ export const uploadContent = async (req: WalletSessionRequest, res: Response): P
         wrappedKeyCiphertextB64: "",
         wrappedKeyIvB64: "",
         wrappedKeyAuthTagB64: "",
+        expiresAt: payload.expiresAt ? new Date(payload.expiresAt) : null,
+        viewLimit: payload.viewLimit ?? null,
+        views: 0,
+        encryptedData: payload.encryptedData ?? null,
       },
     });
 
@@ -198,6 +208,10 @@ export const getContent = async (req: Request, res: Response): Promise<void> => 
       sizeBytes: true,
       chunkSizeBytes: true,
       chunkCount: true,
+      encryptedData: true,
+      expiresAt: true,
+      viewLimit: true,
+      views: true,
       createdAt: true,
       creator: {
         select: {
@@ -271,12 +285,27 @@ export const updateContent = async (req: WalletSessionRequest, res: Response): P
         return;
       }
     }
-    const updateData: { subscriptionTierId?: string | null; isPublished?: boolean } = {};
+    const updateData: {
+      subscriptionTierId?: string | null;
+      isPublished?: boolean;
+      expiresAt?: Date | null;
+      viewLimit?: number | null;
+      encryptedData?: string | null;
+    } = {};
     if ("subscriptionTierId" in payload) {
       updateData.subscriptionTierId = subscriptionTierId ?? null;
     }
     if (typeof payload.isPublished === "boolean") {
       updateData.isPublished = payload.isPublished;
+    }
+    if ("expiresAt" in payload) {
+      updateData.expiresAt = payload.expiresAt ? new Date(payload.expiresAt) : null;
+    }
+    if ("viewLimit" in payload) {
+      updateData.viewLimit = payload.viewLimit ?? null;
+    }
+    if ("encryptedData" in payload) {
+      updateData.encryptedData = payload.encryptedData ?? null;
     }
 
     const updated = await prisma.content.update({

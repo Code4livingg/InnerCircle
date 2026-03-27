@@ -13,12 +13,7 @@ type AleoSdkModule = {
 };
 
 const loadAleoSdk = async (): Promise<AleoSdkModule> => {
-  const modulePath =
-    env.aleoNetwork === "mainnet"
-      ? "@provablehq/sdk/mainnet.js"
-      : "@provablehq/sdk/testnet.js";
-
-  return (await import(modulePath)) as AleoSdkModule;
+  return (await import("@provablehq/sdk/testnet.js")) as AleoSdkModule;
 };
 
 export const verifyAleoWalletSignature = async (

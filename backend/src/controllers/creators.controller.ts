@@ -19,6 +19,8 @@ const registerSchema = z.object({
     .regex(/^[a-z0-9_-]+$/i, "Handle must contain only letters, numbers, underscores, or hyphens"),
   displayName: z.string().max(80).optional(),
   bio: z.string().max(500).optional(),
+  acceptedPaymentAssets: z.array(z.string()).optional(),
+  acceptedPaymentVisibilities: z.array(z.string()).optional(),
 });
 
 const pricingSchema = z.object({
@@ -26,11 +28,33 @@ const pricingSchema = z.object({
   subscriptionPriceMicrocredits: z.coerce.bigint().nonnegative(),
 });
 
+const paymentPreferencesSchema = z.object({
+  walletAddress: z.string().min(10),
+  acceptedPaymentAssets: z.array(z.string()).min(1),
+  acceptedPaymentVisibilities: z.array(z.string()).min(1),
+});
+
 const walletLookupSchema = z.object({
   walletAddress: z.string().min(10),
 });
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+const ALLOWED_PAYMENT_ASSETS = new Set(["ALEO_CREDITS", "USDCX"]);
+const ALLOWED_PAYMENT_VISIBILITIES = new Set(["PUBLIC", "PRIVATE"]);
+
+const sanitizeCreatorPaymentAssets = (values: string[] | undefined): string[] => {
+  const normalized = (values ?? ["ALEO_CREDITS"])
+    .map((value) => value.trim().toUpperCase())
+    .filter((value) => ALLOWED_PAYMENT_ASSETS.has(value));
+  return normalized.length > 0 ? [...new Set(normalized)] : ["ALEO_CREDITS"];
+};
+
+const sanitizeCreatorPaymentVisibilities = (values: string[] | undefined): string[] => {
+  const normalized = (values ?? ["PUBLIC", "PRIVATE"])
+    .map((value) => value.trim().toUpperCase())
+    .filter((value) => ALLOWED_PAYMENT_VISIBILITIES.has(value));
+  return normalized.length > 0 ? [...new Set(normalized)] : ["PUBLIC", "PRIVATE"];
+};
 
 const getActiveSubscriptionCutoff = (): Date => new Date(Date.now() - THIRTY_DAYS_MS);
 
@@ -65,6 +89,8 @@ export const registerCreator = async (req: Request, res: Response): Promise<void
   try {
     const payload = registerSchema.parse(req.body);
     const wh = walletHashForAddress(payload.walletAddress);
+    const acceptedPaymentAssets = sanitizeCreatorPaymentAssets(payload.acceptedPaymentAssets);
+    const acceptedPaymentVisibilities = sanitizeCreatorPaymentVisibilities(payload.acceptedPaymentVisibilities);
     await ensureWalletRoleByHash(wh, "CREATOR");
 
     const creator = await prisma.creator.upsert({
@@ -74,6 +100,8 @@ export const registerCreator = async (req: Request, res: Response): Promise<void
         handle: payload.handle.toLowerCase(),
         displayName: payload.displayName,
         bio: payload.bio,
+        acceptedPaymentAssets,
+        acceptedPaymentVisibilities,
       },
       create: {
         walletHash: wh,
@@ -82,6 +110,8 @@ export const registerCreator = async (req: Request, res: Response): Promise<void
         handle: payload.handle.toLowerCase(),
         displayName: payload.displayName,
         bio: payload.bio,
+        acceptedPaymentAssets,
+        acceptedPaymentVisibilities,
       },
     });
 
@@ -122,6 +152,8 @@ export const listCreators = async (_req: Request, res: Response): Promise<void> 
         bio: true,
         avatarObjectKey: true,
         subscriptionPriceMicrocredits: true,
+        acceptedPaymentAssets: true,
+        acceptedPaymentVisibilities: true,
         isVerified: true,
         createdAt: true,
         _count: {
@@ -271,6 +303,33 @@ export const setCreatorPricing = async (req: Request, res: Response): Promise<vo
   }
 };
 
+export const setCreatorPaymentPreferences = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const payload = paymentPreferencesSchema.parse(req.body);
+    const wh = walletHashForAddress(payload.walletAddress);
+
+    const creator = await prisma.creator.update({
+      where: { walletHash: wh },
+      data: {
+        acceptedPaymentAssets: sanitizeCreatorPaymentAssets(payload.acceptedPaymentAssets),
+        acceptedPaymentVisibilities: sanitizeCreatorPaymentVisibilities(payload.acceptedPaymentVisibilities),
+      },
+    });
+
+    res.json({ creator });
+  } catch (error) {
+    if (isDatabaseUnavailableError(error)) {
+      res.status(503).json({
+        error: DB_UNAVAILABLE_MESSAGE,
+        code: DB_UNAVAILABLE_CODE,
+      });
+      return;
+    }
+
+    res.status(400).json({ error: (error as Error).message });
+  }
+};
+
 export const getCreatorAnalyticsByWalletAddress = async (req: Request, res: Response): Promise<void> => {
   try {
     const payload = walletLookupSchema.parse(req.params);
@@ -385,7 +444,7 @@ export const getCreatorAnalyticsByWalletAddress = async (req: Request, res: Resp
         SELECT date_trunc('day', "verifiedAt") AS day,
                SUM("priceMicrocredits") AS total
         FROM "SubscriptionPurchase"
-        WHERE "creatorId" = ${creator.id}
+        WHERE "creatorId" = CAST(${creator.id} AS uuid)
           AND "verifiedAt" >= ${seriesStart}
         GROUP BY day
         ORDER BY day
@@ -395,7 +454,7 @@ export const getCreatorAnalyticsByWalletAddress = async (req: Request, res: Resp
                SUM(p."priceMicrocredits") AS total
         FROM "PpvPurchase" p
         JOIN "Content" c ON p."contentId" = c."id"
-        WHERE c."creatorId" = ${creator.id}
+        WHERE c."creatorId" = CAST(${creator.id} AS uuid)
           AND p."verifiedAt" >= ${seriesStart}
         GROUP BY day
         ORDER BY day
@@ -404,7 +463,7 @@ export const getCreatorAnalyticsByWalletAddress = async (req: Request, res: Resp
         SELECT date_trunc('day', "createdAt") AS day,
                SUM("amountMicrocredits") AS total
         FROM "Tip"
-        WHERE "creatorId" = ${creator.id}
+        WHERE "creatorId" = CAST(${creator.id} AS uuid)
           AND "createdAt" >= ${seriesStart}
         GROUP BY day
         ORDER BY day
@@ -414,7 +473,7 @@ export const getCreatorAnalyticsByWalletAddress = async (req: Request, res: Resp
                COUNT(*)::bigint AS total
         FROM "StreamEvent" s
         JOIN "Content" c ON s."contentId" = c."id"
-        WHERE c."creatorId" = ${creator.id}
+        WHERE c."creatorId" = CAST(${creator.id} AS uuid)
           AND s."createdAt" >= ${seriesStart}
         GROUP BY day
         ORDER BY day

@@ -117,14 +117,19 @@ Required environment variables:
 On Windows PowerShell:
 
 ```powershell
-.\aleo-contracts\deploy.ps1 -Network testnet -Programs subscription
+.\aleo-contracts\deploy.ps1 -Network testnet -Programs payment_proof
 ```
 
 After deployment, update program IDs in your backend and frontend environment configuration. Avoid hardcoding program IDs in source.
 
 ### Testnet Deployment Tx IDs
 
-- `tip_pay_v1_xwnxp.aleo` upgrade tx: `at1gg0zf3kwuj3hxlg44yn7yy7x3jv0a4k7t6puhexwlfkd4x9v7ugqa08dzv`
+- `creator_reg_v3_xwnxp.aleo` deploy tx: `at1nkh4208908p5uejuy0fgn90lr6qvfn5qmhnza0y9gn4xetaew59qk2eepz`
+- `sub_pay_v4_xwnxp.aleo` deploy tx: `at14avc0pl753qy996csyfc3c0h6utph2u4vsc2flcd4qlepp93x58qcj4t4s`
+- `ppv_pay_v3_xwnxp.aleo` deploy tx: `at1mwquggmtf5fqhl0q749wjvd9jrfp3ecpe522q26j7pf6c5r0uq9s40drxv`
+- `access_pass_v2_xwnxp.aleo` deploy tx: `at1t7aes4wh2vdn0pdse7sgxxstwqgve9w9ffnu9gvhfycs3tv7tq9q8c634h`
+- `tip_pay_v2_xwnxp.aleo` deploy tx: `at1f2q0a4vt6py39ljaum0nglhrjayf374j4dakvfzq02x4r96kau9q32km4n`
+- `sub_invoice_v3_xwnxp.aleo` deploy tx: `at1uw3zynjzewuqj8a8p0p9rzjxuufp6af7px6jljqpj6y3hp2uwcys2vldnp`
 
 ## Security and Privacy
 

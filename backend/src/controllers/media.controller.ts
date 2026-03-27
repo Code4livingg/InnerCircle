@@ -2,8 +2,9 @@ import type { Response } from "express";
 import { prisma } from "../db/prisma.js";
 import type { SessionRequest } from "../middleware/requireSession.js";
 import { generateMediaUrl, signedUrlTtlSeconds } from "../services/mediaStorageService.js";
-import { getSubscriptionActiveUntil } from "../services/subscriptionService.js";
-import { createWatermarkId } from "../services/watermarkService.js";
+import { getSubscriptionActiveUntil, tierFromPriceMicrocredits } from "../services/subscriptionService.js";
+import { buildWatermarkHeaders, createWatermarkId } from "../services/watermarkService.js";
+import { deleteContentRecord, hasReachedViewLimit, isExpired } from "../services/selfDestructService.js";
 
 const canAccessContentWithSession = (
   session: NonNullable<SessionRequest["session"]>,
@@ -33,6 +34,9 @@ export const getMediaAccessUrl = async (req: SessionRequest, res: Response): Pro
         id: true,
         baseObjectKey: true,
         mimeType: true,
+        expiresAt: true,
+        viewLimit: true,
+        views: true,
         subscriptionTier: {
           select: {
             id: true,
@@ -53,38 +57,75 @@ export const getMediaAccessUrl = async (req: SessionRequest, res: Response): Pro
       return;
     }
 
+    const expired = isExpired(content.expiresAt ?? null);
+    const limitReached = hasReachedViewLimit(content.views ?? 0, content.viewLimit ?? null);
+    if (expired || limitReached) {
+      await deleteContentRecord(content.id);
+      res.status(410).json({ error: "Content has expired or reached its view limit." });
+      return;
+    }
+
     if (!canAccessContentWithSession(session, content.id, content.creator.handle)) {
       res.status(403).json({ error: "Invalid session scope" });
       return;
     }
 
-    if (session.scope.type === "subscription") {
-      const latestPurchase = await prisma.subscriptionPurchase.findFirst({
-        where: {
-          creatorId: content.creator.id,
-          walletHash: session.wh,
-        },
-        orderBy: { verifiedAt: "desc" },
-        select: {
-          verifiedAt: true,
-          priceMicrocredits: true,
-        },
-      });
-
-      if (!latestPurchase) {
-        res.status(403).json({ error: "No active subscription for this creator." });
+    if (session.scope.type === "subscription" && session.scope.verifiedBy === "zk-proof") {
+      if (!session.scope.expiresAt || session.scope.expiresAt <= Date.now()) {
+        res.status(403).json({ error: "Subscription proof expired. Generate a fresh proof to continue." });
         return;
       }
 
-      const activeUntil = getSubscriptionActiveUntil(latestPurchase.verifiedAt);
-      if (activeUntil.getTime() <= Date.now()) {
-        res.status(403).json({ error: "Subscription expired. Please renew to continue." });
-        return;
-      }
-
-      if (content.subscriptionTier?.priceMicrocredits && latestPurchase.priceMicrocredits < content.subscriptionTier.priceMicrocredits) {
+      const requiredTier = tierFromPriceMicrocredits(content.subscriptionTier?.priceMicrocredits ?? null);
+      if ((session.scope.tier ?? 1) < requiredTier) {
         res.status(403).json({ error: "Subscription tier upgrade required to access this content." });
         return;
+      }
+    }
+
+    if (session.scope.type === "subscription" && session.scope.verifiedBy !== "proof" && session.scope.verifiedBy !== "zk-proof") {
+      // New anonymous sessions carry a scoped entitlement so playback does not
+      // have to look up purchases by a stable wallet identifier.
+      if (session.scope.entitlementBound && session.scope.expiresAt) {
+        if (session.scope.expiresAt <= Date.now()) {
+          res.status(403).json({ error: "Subscription expired. Please renew to continue." });
+          return;
+        }
+
+        const requiredTier = tierFromPriceMicrocredits(content.subscriptionTier?.priceMicrocredits ?? null);
+        if ((session.scope.tier ?? 1) < requiredTier) {
+          res.status(403).json({ error: "Subscription tier upgrade required to access this content." });
+          return;
+        }
+      } else {
+        const latestPurchase = await prisma.subscriptionPurchase.findFirst({
+          where: {
+            creatorId: content.creator.id,
+            walletHash: session.wh,
+          },
+          orderBy: { verifiedAt: "desc" },
+          select: {
+            verifiedAt: true,
+            expiresAt: true,
+            priceMicrocredits: true,
+          },
+        });
+
+        if (!latestPurchase) {
+          res.status(403).json({ error: "No active subscription for this creator." });
+          return;
+        }
+
+        const activeUntil = getSubscriptionActiveUntil(latestPurchase.verifiedAt, latestPurchase.expiresAt ?? null);
+        if (activeUntil.getTime() <= Date.now()) {
+          res.status(403).json({ error: "Subscription expired. Please renew to continue." });
+          return;
+        }
+
+        if (content.subscriptionTier?.priceMicrocredits && latestPurchase.priceMicrocredits < content.subscriptionTier.priceMicrocredits) {
+          res.status(403).json({ error: "Subscription tier upgrade required to access this content." });
+          return;
+        }
       }
     }
 
@@ -95,6 +136,8 @@ export const getMediaAccessUrl = async (req: SessionRequest, res: Response): Pro
 
     await prisma.streamEvent.create({
       data: {
+        // New access sessions persist the unlinkable session subject here so
+        // watermark tracing does not point back to a stable wallet hash.
         walletHash: session.wh,
         contentId: content.id,
         sessionId: session.sid,
@@ -104,6 +147,10 @@ export const getMediaAccessUrl = async (req: SessionRequest, res: Response): Pro
     });
 
     res.setHeader("Cache-Control", "no-store");
+    const watermarkHeaders = buildWatermarkHeaders(session.sid, watermarkId);
+    for (const [header, value] of Object.entries(watermarkHeaders)) {
+      res.setHeader(header, value);
+    }
     res.json({
       url,
       expiresAt,

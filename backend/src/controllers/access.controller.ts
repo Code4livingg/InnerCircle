@@ -37,7 +37,7 @@ export const unlockSubscription = async (req: Request, res: Response): Promise<v
     });
 
     const session = createSessionToken({
-      walletHash: verified.walletHash,
+      identitySeed: verified.walletHash,
       scope: { type: "subscription", creatorId: creator.handle },
     });
 
@@ -85,7 +85,7 @@ export const unlockContent = async (req: Request, res: Response): Promise<void> 
     });
 
     const session = createSessionToken({
-      walletHash: verified.walletHash,
+      identitySeed: verified.walletHash,
       scope: { type: "ppv", contentId: content.id },
     });
 
@@ -172,7 +172,10 @@ export const streamChunk = async (req: SessionRequest, res: Response): Promise<v
     res.setHeader("Content-Type", chunk.mimeType);
     res.setHeader("Cache-Control", "private, no-store");
     res.setHeader("Accept-Ranges", "bytes");
+    // The response metadata carries the session watermark without mutating the
+    // binary chunk payload.
     res.setHeader("X-Watermark-Id", chunk.watermarkId);
+    res.setHeader("X-Session-Watermark", session.sid);
     res.send(chunk.chunk);
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });

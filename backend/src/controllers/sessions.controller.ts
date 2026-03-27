@@ -11,11 +11,19 @@ import {
   verifySubscriptionPayment,
   verifyAccessPassPayment,
   verifyAccessPassProof,
+  verifyZKProof,
 } from "../services/proofVerificationService.js";
+import {
+  getNullifierStatus,
+  verifyMembershipProof,
+  verifyPaymentProof,
+} from "../services/proofStoreService.js";
 import { ensureWalletRoleByHash, toClientRole, WalletRoleConflictError } from "../services/walletRoleService.js";
 import { DB_UNAVAILABLE_CODE, DB_UNAVAILABLE_MESSAGE, isDatabaseUnavailableError } from "../utils/dbErrors.js";
 import { walletHashForAddress } from "../services/walletRoleService.js";
-import { getSubscriptionActiveUntil } from "../services/subscriptionService.js";
+import { getSubscriptionActiveUntil, tierFromPriceMicrocredits } from "../services/subscriptionService.js";
+import { ensureNotSelfDestructed, incrementViewsAndMaybeDelete } from "../services/selfDestructService.js";
+import type { WalletSessionRequest } from "../middleware/requireWalletSession.js";
 
 const proofSchema = z.union([
   z.string().min(10),
@@ -25,6 +33,20 @@ const proofSchema = z.union([
     functionName: z.string().min(3).optional(),
   }),
 ]);
+
+const zkProofSchema = z.object({
+  programId: z.string().min(3),
+  transitionName: z.string().min(3),
+  publicInputs: z.object({
+    circleId: z.string().min(1),
+    currentBlock: z.number().int().nonnegative().optional(),
+    expiresAt: z.number().int().nonnegative(),
+    tier: z.number().int().min(1),
+  }),
+  executionProof: z.string().min(10),
+  verifyingKey: z.string().min(10).optional(),
+  programSource: z.string().min(10).optional(),
+});
 
 const sessionSchema = z.discriminatedUnion("mode", [
   // Original proof-based modes (kept for backward compat)
@@ -48,6 +70,23 @@ const sessionSchema = z.discriminatedUnion("mode", [
     proofTxId: z.string().min(10).optional(),
     proof: proofSchema.optional(),
     walletAddressHint: z.string().min(10).optional(),
+  }),
+  // Hash-based mock ZK proof modes
+  z.object({
+    mode: z.literal("subscription-proof"),
+    creatorHandle: z.string().min(3),
+    proof: z.string().min(8),
+  }),
+  z.object({
+    mode: z.literal("ppv-proof"),
+    contentId: z.string().min(1),
+    proof: z.string().min(8),
+  }),
+  z.object({
+    mode: z.literal("subscription-zk"),
+    circleId: z.string().min(1),
+    nullifier: z.string().min(8),
+    executionProof: zkProofSchema,
   }),
   // Direct purchase-tx modes — no separate prove_ call needed
   z.object({
@@ -73,7 +112,9 @@ const sessionSchema = z.discriminatedUnion("mode", [
 
 const startFingerprintSessionSchema = z.object({
   contentId: z.string().min(1),
-  walletAddress: z.string().min(10),
+  // Keep the old field optional so older clients can continue posting it, but
+  // new anonymous-viewing flows no longer need to send the raw wallet address.
+  walletAddress: z.string().min(10).optional(),
   sessionToken: z.string().min(20),
 });
 
@@ -112,9 +153,136 @@ const canAccessContentWithSession = (
   return session.scope.creatorId === creatorHandle;
 };
 
-export const createAccessSession = async (req: Request, res: Response): Promise<void> => {
+const normalizeFieldId = (value: string): string => value.trim().replace(/field$/i, "");
+const toStoredFieldLiteral = (value: string): string => `${normalizeFieldId(value)}field`;
+
+export const createAccessSession = async (req: WalletSessionRequest, res: Response): Promise<void> => {
   try {
     const payload = sessionSchema.parse(req.body);
+
+    if (payload.mode === "subscription-zk") {
+      const walletSession = req.walletSession;
+      if (!walletSession) {
+        res.status(401).json({ error: "Missing wallet session token" });
+        return;
+      }
+
+      const verified = await verifyZKProof(payload.executionProof);
+      const requestedCircleId = normalizeFieldId(payload.circleId);
+      if (verified.circleId !== requestedCircleId) {
+        res.status(400).json({ error: "circleId does not match the verified proof." });
+        return;
+      }
+
+      const status = await getNullifierStatus(payload.nullifier);
+      if (!status.exists) {
+        res.status(403).json({ error: "Subscription invoice nullifier is not registered." });
+        return;
+      }
+
+      if (!status.usable) {
+        res.status(409).json({ error: "Subscription invoice proof has expired." });
+        return;
+      }
+
+      if (status.circleId !== verified.circleId) {
+        res.status(400).json({ error: "Stored nullifier circle does not match the verified proof." });
+        return;
+      }
+
+      const creator = await prisma.creator.findUnique({
+        where: { creatorFieldId: toStoredFieldLiteral(verified.circleId) },
+        select: { handle: true, walletHash: true },
+      });
+      if (!creator) {
+        res.status(404).json({ error: "Creator not found" });
+        return;
+      }
+
+      if (walletSession.wh === creator.walletHash) {
+        res.status(409).json({
+          error: "Creator wallets cannot open fan subscription sessions.",
+          code: "ROLE_CONFLICT",
+          existingRole: "creator",
+          requestedRole: "user",
+        });
+        return;
+      }
+
+      await ensureWalletRoleByHash(walletSession.wh, "FAN");
+
+      const session = createSessionToken({
+        identitySeed: walletSession.wh,
+        scope: {
+          type: "subscription",
+          creatorId: creator.handle,
+          verifiedBy: "zk-proof",
+          tier: verified.tier,
+          expiresAt: verified.expiresAt.getTime(),
+          entitlementBound: true,
+        },
+      });
+      res.json({ sessionToken: session.token, sessionId: session.sessionId, expiresAt: session.expiresAt });
+      return;
+    }
+
+    if (payload.mode === "subscription-proof") {
+      const creator = await prisma.creator.findUnique({
+        where: { handle: payload.creatorHandle.toLowerCase() },
+        select: { id: true, handle: true },
+      });
+
+      if (!creator) {
+        res.status(404).json({ error: "Creator not found" });
+        return;
+      }
+
+      const valid = await verifyMembershipProof(payload.proof, creator.id);
+      if (!valid) {
+        res.status(403).json({ error: "Invalid membership proof." });
+        return;
+      }
+
+      const proofHash = walletHashForAddress(payload.proof);
+      const session = createSessionToken({
+        identitySeed: proofHash,
+        scope: { type: "subscription", creatorId: creator.handle, verifiedBy: "proof" },
+      });
+      res.json({ sessionToken: session.token, sessionId: session.sessionId, expiresAt: session.expiresAt });
+      return;
+    }
+
+    if (payload.mode === "ppv-proof") {
+      const content = await prisma.content.findUnique({
+        where: { id: payload.contentId },
+        select: { id: true, creator: { select: { handle: true } }, expiresAt: true, viewLimit: true, views: true },
+      });
+
+      if (!content) {
+        res.status(404).json({ error: "Content not found" });
+        return;
+      }
+
+      await ensureNotSelfDestructed(content.id, {
+        expiresAt: content.expiresAt ?? null,
+        viewLimit: content.viewLimit ?? null,
+        views: content.views ?? 0,
+      });
+
+      const valid = await verifyPaymentProof(payload.proof, content.id);
+      if (!valid) {
+        res.status(403).json({ error: "Invalid payment proof." });
+        return;
+      }
+
+      const proofHash = walletHashForAddress(payload.proof);
+      const session = createSessionToken({
+        identitySeed: proofHash,
+        scope: { type: "ppv", contentId: content.id, verifiedBy: "proof" },
+      });
+      res.json({ sessionToken: session.token, sessionId: session.sessionId, expiresAt: session.expiresAt });
+      return;
+    }
 
     // ── subscription-direct: session from subscribe tx, no prove_subscription needed ──
     if (payload.mode === "subscription-direct") {
@@ -172,6 +340,7 @@ export const createAccessSession = async (req: Request, res: Response): Promise<
         },
         select: {
           verifiedAt: true,
+          expiresAt: true,
           subscriptionTierId: true,
         },
       });
@@ -185,12 +354,22 @@ export const createAccessSession = async (req: Request, res: Response): Promise<
         return;
       }
 
-      if (getSubscriptionActiveUntil(purchase.verifiedAt).getTime() <= Date.now()) {
+      if (getSubscriptionActiveUntil(purchase.verifiedAt, purchase.expiresAt ?? null).getTime() <= Date.now()) {
         res.status(409).json({ error: "Subscription expired. Purchase again to continue.", code: "SUBSCRIPTION_EXPIRED" });
         return;
       }
 
-      const session = createSessionToken({ walletHash: verified.walletHash, scope: { type: "subscription", creatorId: creator.handle } });
+      const session = createSessionToken({
+        identitySeed: verified.walletHash,
+        scope: {
+          type: "subscription",
+          creatorId: creator.handle,
+          verifiedBy: "payment",
+          tier: tierFromPriceMicrocredits(expectedPriceMicrocredits),
+          expiresAt: getSubscriptionActiveUntil(purchase.verifiedAt, purchase.expiresAt ?? null).getTime(),
+          entitlementBound: true,
+        },
+      });
       res.json({ sessionToken: session.token, sessionId: session.sessionId, expiresAt: session.expiresAt });
       return;
     }
@@ -241,7 +420,10 @@ export const createAccessSession = async (req: Request, res: Response): Promise<
         return;
       }
 
-      const session = createSessionToken({ walletHash: verified.walletHash, scope: { type: "ppv", contentId: content.id } });
+      const session = createSessionToken({
+        identitySeed: verified.walletHash,
+        scope: { type: "ppv", contentId: content.id, verifiedBy: "payment" },
+      });
       res.json({ sessionToken: session.token, sessionId: session.sessionId, expiresAt: session.expiresAt });
       return;
     }
@@ -284,7 +466,10 @@ export const createAccessSession = async (req: Request, res: Response): Promise<
       }
 
       await ensureWalletRoleByHash(verified.walletHash, "FAN");
-      const session = createSessionToken({ walletHash: verified.walletHash, scope: { type: "ppv", contentId: content.id } });
+      const session = createSessionToken({
+        identitySeed: verified.walletHash,
+        scope: { type: "ppv", contentId: content.id, verifiedBy: "payment" },
+      });
       res.json({ sessionToken: session.token, sessionId: session.sessionId, expiresAt: session.expiresAt });
       return;
     }
@@ -336,8 +521,8 @@ export const createAccessSession = async (req: Request, res: Response): Promise<
       await ensureWalletRoleByHash(verified.walletHash, "FAN");
 
       const session = createSessionToken({
-        walletHash: verified.walletHash,
-        scope: { type: "subscription", creatorId: creator.handle },
+        identitySeed: verified.walletHash,
+        scope: { type: "subscription", creatorId: creator.handle, verifiedBy: "proof" },
       });
 
       res.json({ sessionToken: session.token, sessionId: session.sessionId, expiresAt: session.expiresAt });
@@ -384,8 +569,8 @@ export const createAccessSession = async (req: Request, res: Response): Promise<
       await ensureWalletRoleByHash(verified.walletHash, "FAN");
 
       const session = createSessionToken({
-        walletHash: verified.walletHash,
-        scope: { type: "ppv", contentId: content.id },
+        identitySeed: verified.walletHash,
+        scope: { type: "ppv", contentId: content.id, verifiedBy: "proof" },
       });
 
       res.json({ sessionToken: session.token, sessionId: session.sessionId, expiresAt: session.expiresAt });
@@ -410,8 +595,8 @@ export const createAccessSession = async (req: Request, res: Response): Promise<
     await ensureWalletRoleByHash(verified.walletHash, "FAN");
 
     const session = createSessionToken({
-      walletHash: verified.walletHash,
-      scope: { type: "ppv", contentId: content.id },
+      identitySeed: verified.walletHash,
+      scope: { type: "ppv", contentId: content.id, verifiedBy: "proof" },
     });
 
     res.json({ sessionToken: session.token, sessionId: session.sessionId, expiresAt: session.expiresAt });
@@ -436,6 +621,11 @@ export const createAccessSession = async (req: Request, res: Response): Promise<
       return;
     }
 
+    if (/expired|view limit/i.test((error as Error).message ?? "")) {
+      res.status(410).json({ error: (error as Error).message });
+      return;
+    }
+
     res.status(400).json({ error: (error as Error).message });
   }
 };
@@ -444,17 +634,15 @@ export const startFingerprintSession = async (req: Request, res: Response): Prom
   try {
     const payload = startFingerprintSessionSchema.parse(req.body);
     const session = validateSessionToken(payload.sessionToken);
-    const walletHash = walletHashForAddress(payload.walletAddress);
-
-    if (walletHash !== session.wh) {
-      res.status(403).json({ error: "Wallet address does not match the authorized session." });
-      return;
-    }
+    const sessionSubject = session.ssh ?? session.wh;
 
     const content = await prisma.content.findUnique({
       where: { id: payload.contentId },
       select: {
         id: true,
+        expiresAt: true,
+        viewLimit: true,
+        views: true,
         creator: {
           select: {
             handle: true,
@@ -473,9 +661,16 @@ export const startFingerprintSession = async (req: Request, res: Response): Prom
       return;
     }
 
+    await ensureNotSelfDestructed(content.id, {
+      expiresAt: content.expiresAt ?? null,
+      viewLimit: content.viewLimit ?? null,
+      views: content.views ?? 0,
+    });
+
+    await incrementViewsAndMaybeDelete(content.id);
+
     const fingerprintSession = createFingerprintSession({
-      walletAddress: payload.walletAddress,
-      walletHash,
+      sessionSubject,
       contentId: content.id,
       accessSessionId: session.sid,
     });
@@ -494,6 +689,11 @@ export const startFingerprintSession = async (req: Request, res: Response): Prom
       return;
     }
 
+    if (/expired|view limit/i.test((error as Error).message ?? "")) {
+      res.status(410).json({ error: (error as Error).message });
+      return;
+    }
+
     if ((error as Error).name === "JsonWebTokenError" || (error as Error).name === "TokenExpiredError") {
       res.status(401).json({ error: (error as Error).message });
       return;
@@ -502,3 +702,4 @@ export const startFingerprintSession = async (req: Request, res: Response): Prom
     res.status(400).json({ error: (error as Error).message });
   }
 };
+

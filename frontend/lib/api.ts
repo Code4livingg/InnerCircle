@@ -19,18 +19,35 @@ export class ApiError extends Error {
 
 const throwApiError = async (res: Response): Promise<never> => {
   let payload: ApiErrorPayload = {};
+  let responseText = "";
 
   try {
     payload = (await res.json()) as ApiErrorPayload;
   } catch {
-    // Ignore parse errors and fall back to status text below
+    try {
+      responseText = await res.text();
+    } catch {
+      // Ignore parse errors and fall back to status text below
+    }
   }
 
+  const trimmedResponseText = responseText.trim();
   const fallbackMessage =
     payload.error ??
+    (trimmedResponseText.length > 0 ? trimmedResponseText : undefined) ??
     (res.status >= 500 && res.status <= 504
       ? "Backend API unreachable. Set API_PROXY_BASE or NEXT_PUBLIC_API_BASE and confirm the server is running."
       : res.statusText || "Request failed");
+
+  if (typeof window !== "undefined") {
+    console.warn("[InnerCircle][API] request failed", {
+      url: res.url,
+      status: res.status,
+      statusText: res.statusText,
+      payload,
+      responseText: trimmedResponseText,
+    });
+  }
 
   throw new ApiError(fallbackMessage, res.status, payload.code);
 };
@@ -142,10 +159,15 @@ export interface Creator {
   bio: string | null;
   avatarObjectKey: string | null;
   subscriptionPriceMicrocredits: string | null;
+  acceptedPaymentAssets?: string[];
+  acceptedPaymentVisibilities?: string[];
   isVerified: boolean;
   createdAt: string;
   followerCount?: number;
 }
+
+export type CreatorPaymentAsset = "ALEO_CREDITS" | "USDCX";
+export type CreatorPaymentVisibility = "PUBLIC" | "PRIVATE";
 
 export interface SubscriptionTier {
   id: string;
@@ -170,6 +192,10 @@ export interface Content {
   subscriptionTierId?: string | null;
   isPublished: boolean;
   thumbObjectKey: string | null;
+  encryptedData?: string | null;
+  expiresAt?: string | null;
+  viewLimit?: number | null;
+  views?: number | null;
   createdAt: string;
 }
 
@@ -257,8 +283,17 @@ export interface FanProfileResponse {
 export interface DiscoverFeedResponse {
   creators: Creator[];
   contents: DiscoverContent[];
+  ppvContents: DiscoverContent[];
   recommendedCreators: Creator[];
   fanBudgetMicrocredits: string | null;
+}
+
+interface DiscoverFeedPayload {
+  creators?: Creator[];
+  contents?: DiscoverContent[];
+  ppvContents?: DiscoverContent[];
+  recommendedCreators?: Creator[];
+  fanBudgetMicrocredits?: string | null;
 }
 
 export interface PaymentVerificationResponse {
@@ -275,6 +310,47 @@ export interface PaymentVerificationResponse {
   verifiedAt: string;
 }
 
+export interface SubscriptionExecutionProof {
+  programId: string;
+  transitionName: string;
+  publicInputs: {
+    circleId: string;
+    currentBlock?: number;
+    expiresAt?: number;
+    tier: number;
+  };
+  executionProof: string;
+  verifyingKey?: string;
+  programSource?: string;
+}
+
+export interface SubscriptionVerificationResponse {
+  success: boolean;
+  ok: boolean;
+  kind: "subscription";
+  txId: string;
+  creatorHandle: string;
+  creatorFieldId: string;
+  circleId: string;
+  priceMicrocredits: string;
+  tierId: string | null;
+  tierName: string | null;
+  tier: number;
+  verifiedAt: string;
+  expiresAt: string;
+}
+
+export interface SubscriptionTxVerificationResponse {
+  verified: boolean;
+  ok: boolean;
+  txId: string;
+  circleId: string;
+  tier: number;
+  expiresAt: string;
+}
+
+export interface SubscriptionActivateResponse extends SubscriptionTxVerificationResponse {}
+
 export interface SubscriptionStatusResponse {
   ok: boolean;
   creatorHandle: string;
@@ -287,6 +363,23 @@ export interface SubscriptionStatusResponse {
   tierName: string | null;
   tierPriceMicrocredits: string | null;
 }
+
+export interface MySubscriptionEntry {
+  txId: string;
+  creatorHandle: string;
+  creatorDisplayName: string;
+  creatorAvatarObjectKey: string | null;
+  creatorFieldId: string;
+  active: boolean;
+  verifiedAt: string;
+  activeUntil: string;
+  tierId: string | null;
+  tierName: string | null;
+  tierPriceMicrocredits: string;
+  priceMicrocredits: string;
+}
+
+const isAleoAddress = (value: string): boolean => /^aleo1[0-9a-z]{20,}$/i.test(value.trim());
 
 export interface CreateSessionResponse {
   sessionToken: string;
@@ -400,6 +493,39 @@ export interface VerifyLiveStreamPurchaseResponse {
   verifiedAt: string;
 }
 
+export interface CreatorMessagingKeyResponse {
+  publicKeyB64: string;
+}
+
+export interface PrivateLiveCommentPayload {
+  ciphertextB64: string;
+  nonceB64: string;
+  senderPublicKeyB64: string;
+  senderLabel?: string | null;
+}
+
+export interface PrivateLiveCommentRecord extends PrivateLiveCommentPayload {
+  id: string;
+  createdAt: string;
+}
+
+export interface PrivateLiveCommentsResponse {
+  comments: PrivateLiveCommentRecord[];
+}
+
+export interface StoredProofVerificationResponse {
+  valid: boolean;
+  timestamp: string | null;
+  txHash?: string | null;
+}
+
+export interface SubscriptionUnlockRequest {
+  mode: "subscription-zk";
+  circleId: string;
+  nullifier: string;
+  executionProof: SubscriptionExecutionProof;
+}
+
 export interface SessionProofPayload {
   txId: string;
   programId?: string;
@@ -413,12 +539,14 @@ export type VerifyPurchaseRequest =
     creatorHandle: string;
     walletAddressHint?: string;
     tierId?: string;
+    membershipProof?: string;
   }
   | {
     kind: "ppv";
     txId: string;
     contentId: string;
     walletAddressHint?: string;
+    paymentProof?: string;
   };
 
 export type CreateSessionRequest =
@@ -435,6 +563,16 @@ export type CreateSessionRequest =
     proof: SessionProofPayload;
     proofTxId?: string;
     walletAddressHint?: string;
+  }
+  | {
+    mode: "subscription-proof";
+    creatorHandle: string;
+    proof: string;
+  }
+  | {
+    mode: "ppv-proof";
+    contentId: string;
+    proof: string;
   }
   | {
     // Direct: issue session from the buy_content purchase tx — no prove_ call needed
@@ -460,16 +598,37 @@ export interface StartSessionRequest {
 
 export const fetchCreators = (): Promise<{ creators: Creator[] }> => getJson("/api/creators");
 
-export const fetchDiscoverFeed = (walletAddress?: string | null): Promise<DiscoverFeedResponse> =>
-  getJson(
+export const fetchDiscoverFeed = async (walletAddress?: string | null): Promise<DiscoverFeedResponse> => {
+  const data = await getJson<DiscoverFeedPayload>(
     `/api/discover/feed${walletAddress ? `?walletAddress=${encodeURIComponent(walletAddress)}` : ""}`,
   );
+  const contents = Array.isArray(data.contents) ? data.contents : [];
+  const ppvContents = Array.isArray(data.ppvContents)
+    ? data.ppvContents
+    : contents.filter((content) => content.accessType === "PPV");
+
+  return {
+    creators: Array.isArray(data.creators) ? data.creators : [],
+    contents,
+    ppvContents,
+    recommendedCreators: Array.isArray(data.recommendedCreators) ? data.recommendedCreators : [],
+    fanBudgetMicrocredits: typeof data.fanBudgetMicrocredits === "string" ? data.fanBudgetMicrocredits : null,
+  };
+};
 
 export const fetchCreatorByHandle = (handle: string): Promise<{ creator: CreatorWithContent }> =>
-  getJson(`/api/creators/${handle}`);
+  getJson(`/api/creators/${encodeURIComponent(handle.trim())}`);
 
 export const fetchCreatorByWallet = (walletAddress: string): Promise<{ creator: CreatorWithContent }> =>
   getJson(`/api/creators/by-wallet/${encodeURIComponent(walletAddress)}`);
+
+export const setCreatorPaymentPreferences = (
+  body: {
+    walletAddress: string;
+    acceptedPaymentAssets: CreatorPaymentAsset[];
+    acceptedPaymentVisibilities: CreatorPaymentVisibility[];
+  },
+): Promise<{ creator: Creator }> => postJson("/api/creators/payment-preferences", body);
 
 export const fetchSubscriptionTiers = (creatorHandle: string): Promise<{ tiers: SubscriptionTier[] }> =>
   getJson(`/api/tiers/creator/${encodeURIComponent(creatorHandle)}`);
@@ -592,16 +751,124 @@ export const setCreatorFollow = (body: {
 export const verifyPurchase = (body: VerifyPurchaseRequest): Promise<PaymentVerificationResponse> =>
   postJson("/api/subscriptions/verify", body);
 
+export const createSubscription = (
+  body: {
+    kind: "subscription";
+    executionProof: SubscriptionExecutionProof;
+    nullifier: string;
+    circleId: string;
+    tierId?: string;
+    paymentTxId?: string;
+  },
+  walletToken: string,
+): Promise<SubscriptionVerificationResponse> =>
+  postJsonWithHeaders("/api/subscriptions", body, {
+    Authorization: `Bearer ${walletToken}`,
+  });
+
+export const verifySubscriptionByTx = (
+  body: {
+    txId: string;
+    circleId: string;
+    nullifier?: string;
+    tierId?: string;
+    paymentTxId?: string;
+  },
+  walletToken: string,
+): Promise<SubscriptionTxVerificationResponse> =>
+  postJsonWithHeaders("/api/subscriptions/verify-by-tx", body, {
+    Authorization: `Bearer ${walletToken}`,
+  });
+
+export const activateSubscription = (
+  body: {
+    txId: string;
+    address: string;
+    circleId: string;
+    nullifier?: string;
+    tierId?: string;
+    paymentTxId?: string;
+  },
+  walletToken: string,
+): Promise<SubscriptionActivateResponse> =>
+  postJsonWithHeaders("/api/subscriptions/activate", body, {
+    Authorization: `Bearer ${walletToken}`,
+  });
+
+export const submitPaymentProof = (
+  body: { contentId: string; proof: string; txHash?: string },
+  walletToken: string,
+): Promise<{ ok: boolean }> =>
+  postJsonWithHeaders("/api/proofs/payment", body, {
+    Authorization: `Bearer ${walletToken}`,
+  });
+
+export const verifyStoredPaymentProof = (
+  body: { contentId: string; proof: string },
+): Promise<StoredProofVerificationResponse> =>
+  postJson("/api/proofs/payment/verify", body);
+
+export const submitMembershipProof = (
+  body: { circleId: string; proof: string },
+  walletToken: string,
+): Promise<{ ok: boolean }> =>
+  postJsonWithHeaders("/api/proofs/membership", body, {
+    Authorization: `Bearer ${walletToken}`,
+  });
+
+export const verifyStoredMembershipProof = (
+  body: { circleId: string; proof: string },
+): Promise<StoredProofVerificationResponse> =>
+  postJson("/api/proofs/membership/verify", body);
+
 export const fetchSubscriptionStatus = (
   creatorHandle: string,
   walletAddress: string,
-): Promise<SubscriptionStatusResponse> =>
-  getJson(
-    `/api/subscriptions/status?creatorHandle=${encodeURIComponent(creatorHandle)}&walletAddress=${encodeURIComponent(walletAddress)}`,
-  );
+): Promise<SubscriptionStatusResponse> => {
+  const normalizedCreatorHandle = creatorHandle.trim();
+  const normalizedWalletAddress = walletAddress.trim();
+
+  if (!normalizedCreatorHandle) {
+    throw new Error("Cannot fetch subscription status without a creator handle.");
+  }
+  if (!isAleoAddress(normalizedWalletAddress)) {
+    throw new Error(`Cannot fetch subscription status with invalid wallet address "${walletAddress}".`);
+  }
+
+  const query = new URLSearchParams({
+    creatorHandle: normalizedCreatorHandle,
+    walletAddress: normalizedWalletAddress,
+  });
+  const path = `/api/subscriptions/status?${query.toString()}`;
+
+  if (typeof window !== "undefined") {
+    console.info("[InnerCircle][API] GET subscription status", {
+      path,
+      creatorHandle: normalizedCreatorHandle,
+      walletAddress: normalizedWalletAddress,
+    });
+  }
+
+  return getJson(path);
+};
+
+export const fetchMySubscriptions = (
+  walletToken: string,
+): Promise<{ subscriptions: MySubscriptionEntry[] }> =>
+  getJsonWithHeaders("/api/subscriptions/mine", {
+    Authorization: `Bearer ${walletToken}`,
+  });
 
 export const createSession = (body: CreateSessionRequest): Promise<CreateSessionResponse> =>
   postJson("/api/sessions/create", body);
+
+export const unlockSubscriptionSession = (
+  body: SubscriptionUnlockRequest,
+  walletToken: string,
+): Promise<CreateSessionResponse> =>
+  postJsonWithHeaders("/api/sessions/unlock", body, {
+    Authorization: `Bearer ${walletToken}`,
+  });
 
 export const startSession = (body: StartSessionRequest): Promise<StartSessionResponse> =>
   postJson("/api/start-session", body);
@@ -688,3 +955,33 @@ export const verifyLiveStreamPurchase = (
   postJsonWithHeaders(`/api/livestreams/${encodeURIComponent(liveStreamId)}/purchase/verify`, body, {
     Authorization: `Bearer ${walletToken}`,
   });
+
+export const registerCreatorMessagingKey = (
+  body: { publicKeyB64: string },
+  walletToken: string,
+): Promise<{ ok: boolean }> =>
+  postJsonWithHeaders("/api/live-comments/creator-key", body, {
+    Authorization: `Bearer ${walletToken}`,
+  });
+
+export const fetchCreatorMessagingKey = (creatorId: string): Promise<CreatorMessagingKeyResponse> =>
+  getJson(`/api/live-comments/creator-key/${encodeURIComponent(creatorId)}`);
+
+export const sendPrivateLiveComment = (
+  liveStreamId: string,
+  body: PrivateLiveCommentPayload,
+): Promise<{ ok: boolean }> =>
+  postJson(`/api/live-comments/${encodeURIComponent(liveStreamId)}`, body);
+
+export const fetchPrivateLiveComments = (
+  liveStreamId: string,
+  walletToken: string,
+  since?: string,
+): Promise<PrivateLiveCommentsResponse> =>
+  getJsonWithHeaders(
+    `/api/live-comments/${encodeURIComponent(liveStreamId)}${since ? `?since=${encodeURIComponent(since)}` : ""}`,
+    {
+      Authorization: `Bearer ${walletToken}`,
+    },
+  );
+

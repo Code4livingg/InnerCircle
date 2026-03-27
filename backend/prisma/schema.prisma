@@ -36,11 +36,16 @@ model Creator {
   bio                           String?
   avatarObjectKey               String?                   // storage key for avatar image
   subscriptionPriceMicrocredits BigInt    @default(0)
+  acceptedPaymentAssets         String[]  @default(["ALEO_CREDITS"])
+  acceptedPaymentVisibilities   String[]  @default(["PUBLIC", "PRIVATE"])
   isVerified                    Boolean   @default(false)
   createdAt                     DateTime  @default(now())
 
   contents  Content[]
   liveStreams LiveStream[]
+  membershipProofs MembershipProof[]
+  messagingKey CreatorMessagingKey?
+  liveComments LiveComment[]
   subscriptionPurchases SubscriptionPurchase[]
   followers CreatorFollow[]
   subscriptionTiers SubscriptionTier[]
@@ -103,6 +108,7 @@ model Content {
   storageProvider  String   @default("LOCAL") // "LOCAL" | "S3"
   baseObjectKey    String                      // base path in object store
   thumbObjectKey   String?                     // thumbnail image key
+  encryptedData    String?  @db.Text           // optional encrypted payload for self-destruct content
 
   // Pricing: null = subscription-only, >0 = pay-per-view
   ppvPriceMicrocredits BigInt?
@@ -112,6 +118,11 @@ model Content {
   sizeBytes        BigInt   @default(0)
   chunkSizeBytes   Int      @default(0)
   chunkCount       Int      @default(0)
+
+  // Self-destruct controls
+  expiresAt        DateTime?
+  viewLimit        Int?
+  views            Int      @default(0)
 
   // AES-GCM wrapped content key
   wrappedKeyCiphertextB64 String @default("")
@@ -123,10 +134,72 @@ model Content {
   chunks           ContentChunk[]
   streamEvents     StreamEvent[]
   ppvPurchases     PpvPurchase[]
+  paymentProofs    PaymentProof[]
 
   @@index([creatorId])
   @@index([isPublished])
   @@index([subscriptionTierId])
+}
+
+model PaymentProof {
+  id         String   @id @default(uuid()) @db.Uuid
+  contentId  String   @db.Uuid
+  content    Content  @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  proof      String
+  txHash     String?
+  createdAt  DateTime @default(now())
+
+  @@unique([contentId, proof])
+  @@index([contentId])
+}
+
+model MembershipProof {
+  id         String   @id @default(uuid()) @db.Uuid
+  circleId   String   @db.Uuid
+  creator    Creator  @relation(fields: [circleId], references: [id], onDelete: Cascade)
+  proof      String
+  createdAt  DateTime @default(now())
+
+  @@unique([circleId, proof])
+  @@index([circleId])
+}
+
+model SubscriptionNullifier {
+  id         String   @id @default(uuid()) @db.Uuid
+  nullifier  String   @unique
+  circleId   String   @map("circle_id")
+  expiresAt  DateTime @map("expires_at")
+  usedAt     DateTime? @map("used_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@index([circleId])
+  @@map("subscription_nullifiers")
+}
+
+model CreatorMessagingKey {
+  id         String   @id @default(uuid()) @db.Uuid
+  creatorId  String   @unique @db.Uuid
+  creator    Creator  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  publicKeyB64 String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model LiveComment {
+  id                 String    @id @default(uuid()) @db.Uuid
+  liveStreamId       String    @db.Uuid
+  liveStream         LiveStream @relation(fields: [liveStreamId], references: [id], onDelete: Cascade)
+  creatorId          String    @db.Uuid
+  creator            Creator   @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  ciphertextB64      String
+  nonceB64           String
+  senderPublicKeyB64 String
+  senderLabel        String?
+  createdAt          DateTime  @default(now())
+
+  @@index([creatorId])
+  @@index([liveStreamId])
 }
 
 // ── ContentChunk ─────────────────────────────────────────────────────────────
@@ -175,6 +248,7 @@ model SubscriptionPurchase {
   creatorFieldId     String
   priceMicrocredits  BigInt
   verifiedAt         DateTime @default(now())
+  expiresAt          DateTime? @map("expires_at")
   createdAt          DateTime @default(now())
 
   @@index([creatorId])
@@ -245,7 +319,7 @@ model LiveStream {
   id                             String            @id @default(uuid()) @db.Uuid
   creatorId                      String            @db.Uuid
   creator                        Creator           @relation(fields: [creatorId], references: [id], onDelete: Cascade)
-  ivsChannelArn                  String            @unique
+  ivsChannelArn                  String
   ivsChannelName                 String
   streamKeyArn                   String
   streamKeyValue                 String
@@ -265,8 +339,10 @@ model LiveStream {
   endedAt                        DateTime?
   createdAt                      DateTime          @default(now())
   purchases                      LiveStreamPurchase[]
+  comments                       LiveComment[]
 
   @@index([creatorId])
+  @@index([ivsChannelArn])
   @@index([status])
 }
 

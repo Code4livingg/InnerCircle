@@ -1,0 +1,15 @@
+{
+  "program": "access_control_v3_xwnxp.aleo",
+  "version": "0.1.0",
+  "description": "Membership access control for creator circles.",
+  "license": "MIT",
+  "leo": "3.4.0",
+  "dependencies": [
+    {
+      "name": "creator_reg_v5_xwnxp.aleo",
+      "location": "network",
+      "path": null,
+      "edition": null
+    }
+  ]
+}

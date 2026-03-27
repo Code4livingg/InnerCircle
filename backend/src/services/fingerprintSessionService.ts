@@ -6,6 +6,7 @@ export interface FingerprintSessionRecord {
   sessionId: string;
   fingerprint: string;
   walletHash: string;
+  sessionSubject: string;
   shortWallet: string;
   contentId: string;
   accessSessionId: string;
@@ -14,8 +15,7 @@ export interface FingerprintSessionRecord {
 }
 
 export interface CreateFingerprintSessionInput {
-  walletAddress: string;
-  walletHash: string;
+  sessionSubject: string;
   contentId: string;
   accessSessionId: string;
 }
@@ -47,27 +47,23 @@ const generateShortSessionId = (): string => {
   return nextId;
 };
 
-const shortenWallet = (walletAddress: string): string => {
-  const normalized = walletAddress.trim();
-  if (normalized.length <= 16) {
-    return normalized;
-  }
-
-  return `${normalized.slice(0, 10)}...${normalized.slice(-4)}`;
+const anonymizeSubject = (sessionSubject: string): string => {
+  const normalized = sessionSubject.trim().toLowerCase();
+  const hash = sha256Hex(normalized).slice(0, 6).toUpperCase();
+  return `Anon_${hash}`;
 };
 
-export const generateSessionFingerprint = (walletAddress: string): string => {
+export const generateSessionFingerprint = (sessionSubject: string): string => {
   const timestamp = Date.now().toString();
   const randomNonce = randomBytes(16).toString("hex");
 
-  return sha256Hex(`${walletAddress.trim().toLowerCase()}:${timestamp}:${randomNonce}:${env.sessionSecret}`)
+  return sha256Hex(`${sessionSubject.trim().toLowerCase()}:${timestamp}:${randomNonce}:${env.sessionSecret}`)
     .slice(0, 8)
     .toUpperCase();
 };
 
 export const createFingerprintSession = ({
-  walletAddress,
-  walletHash,
+  sessionSubject,
   contentId,
   accessSessionId,
 }: CreateFingerprintSessionInput): FingerprintSessionRecord => {
@@ -76,9 +72,12 @@ export const createFingerprintSession = ({
   const createdAt = Date.now();
   const record: FingerprintSessionRecord = {
     sessionId: generateShortSessionId(),
-    fingerprint: generateSessionFingerprint(walletAddress),
-    walletHash,
-    shortWallet: shortenWallet(walletAddress),
+    fingerprint: generateSessionFingerprint(sessionSubject),
+    // Keep the legacy field populated for compatibility, but store the new
+    // unlinkable session subject instead of the stable wallet hash.
+    walletHash: sessionSubject,
+    sessionSubject,
+    shortWallet: anonymizeSubject(sessionSubject),
     contentId,
     accessSessionId,
     createdAt,

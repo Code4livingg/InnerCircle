@@ -9,16 +9,24 @@ import {
 export type WalletContextState = ProvableWalletContextState & {
   publicKey: string | null;
   requestRecordPlaintexts?: (program: string) => Promise<unknown[]>;
+  requestProgramRecords?: (program: string, decrypt?: boolean) => Promise<unknown[]>;
 };
 
 export const useWallet = (): WalletContextState => {
   const wallet = useProvableWallet();
 
+  const requestProgramRecords = useMemo(
+    () =>
+      async (program: string, decrypt = true): Promise<unknown[]> =>
+        wallet.requestRecords(program, decrypt),
+    [wallet],
+  );
+
   const requestRecordPlaintexts = useMemo(
     () =>
       async (program: string): Promise<unknown[]> =>
-        wallet.requestRecords(program, true),
-    [wallet],
+        requestProgramRecords(program, true),
+    [requestProgramRecords],
   );
 
   return useMemo(
@@ -26,7 +34,8 @@ export const useWallet = (): WalletContextState => {
       ...wallet,
       publicKey: wallet.address ?? null,
       requestRecordPlaintexts,
+      requestProgramRecords,
     }),
-    [wallet, requestRecordPlaintexts],
+    [wallet, requestRecordPlaintexts, requestProgramRecords],
   );
 };

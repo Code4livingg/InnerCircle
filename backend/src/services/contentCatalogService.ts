@@ -10,3 +10,7 @@ export const upsertEncryptedContent = (entry: StoredEncryptedContent): void => {
 export const getEncryptedContent = (contentId: string): StoredEncryptedContent | undefined => {
   return encryptedCatalog.get(contentId);
 };
+
+export const deleteEncryptedContent = (contentId: string): void => {
+  encryptedCatalog.delete(contentId);
+};

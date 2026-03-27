@@ -29,6 +29,8 @@ export default function UploadPage() {
         accessType: "subscription",
         ppvPrice: "",
         subscriptionTierId: "",
+        expiresAt: "",
+        viewLimit: "",
     });
 
     // Auto-fill wallet address when wallet connects
@@ -105,6 +107,12 @@ export default function UploadPage() {
             if (form.accessType === "subscription" && form.subscriptionTierId) {
                 body.append("subscriptionTierId", form.subscriptionTierId);
             }
+            if (form.expiresAt) {
+                body.append("expiresAt", new Date(form.expiresAt).toISOString());
+            }
+            if (form.viewLimit) {
+                body.append("viewLimit", form.viewLimit);
+            }
 
             const token = await getWalletSessionToken(wallet);
             const res = await fetch(toApiUrl("/api/content/upload"), {
@@ -131,7 +139,7 @@ export default function UploadPage() {
             setSuccess(true);
             setFile(null);
             setThumb(null);
-            setForm((prev) => ({ ...prev, title: "", description: "", ppvPrice: "" }));
+            setForm((prev) => ({ ...prev, title: "", description: "", ppvPrice: "", expiresAt: "", viewLimit: "" }));
         } catch (e) {
             if (e instanceof WalletRoleConflictError) {
                 setError(`This wallet is locked as ${e.existingRole}. Use a different wallet for ${e.requestedRole}.`);
@@ -206,7 +214,8 @@ export default function UploadPage() {
                         <label className="form-label">Your Wallet Address *</label>
                         <input
                             className="form-input"
-                            placeholder={address ? address : "Connect your wallet above, or paste aleo1…"}
+                            type="password"
+                            placeholder={address ? "Connected wallet (hidden)" : "Connect your wallet above"}
                             value={form.walletAddress}
                             onChange={(e) => update("walletAddress", e.target.value)}
                             id="upload-wallet"
@@ -295,6 +304,34 @@ export default function UploadPage() {
                         </div>
                     )}
 
+                    <div className="grid-2" style={{ gap: "var(--s3)" }}>
+                        <div className="form-group">
+                            <label className="form-label">Expires At (optional)</label>
+                            <input
+                                className="form-input"
+                                type="datetime-local"
+                                value={form.expiresAt}
+                                onChange={(e) => update("expiresAt", e.target.value)}
+                                id="upload-expires"
+                            />
+                            <span className="form-hint">Self-destruct timer for this content.</span>
+                        </div>
+                        <div className="form-group">
+                            <label className="form-label">View Limit (optional)</label>
+                            <input
+                                className="form-input"
+                                type="number"
+                                min="1"
+                                step="1"
+                                placeholder="e.g. 10"
+                                value={form.viewLimit}
+                                onChange={(e) => update("viewLimit", e.target.value)}
+                                id="upload-view-limit"
+                            />
+                            <span className="form-hint">Auto-delete after this many views.</span>
+                        </div>
+                    </div>
+
                     {/* Thumbnail */}
                     <div className="form-group">
                         <label className="form-label">Thumbnail (optional)</label>
@@ -327,7 +364,7 @@ export default function UploadPage() {
 
                     {!address && (
                         <p className="t-xs t-dim">
-                            Tip: Connect your wallet via the top bar to auto-fill your wallet address.
+                            Tip: Connect your wallet via the top bar to auto-fill your wallet identity.
                         </p>
                     )}
                 </div>
