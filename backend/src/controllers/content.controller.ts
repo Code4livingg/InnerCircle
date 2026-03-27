@@ -36,10 +36,17 @@ const updateSchema = z.object({
 
 const walletHash = (address: string): string => sha256Hex(address.toLowerCase());
 
-const isMissingEncryptedDataColumnError = (error: unknown): boolean =>
+const missingOptionalContentColumns = new Set([
+  "Content.encryptedData",
+  "Content.expiresAt",
+  "Content.viewLimit",
+  "Content.views",
+]);
+
+const isMissingOptionalContentColumnError = (error: unknown): boolean =>
   error instanceof Prisma.PrismaClientKnownRequestError &&
   error.code === "P2022" &&
-  String(error.meta?.column ?? "") === "Content.encryptedData";
+  missingOptionalContentColumns.has(String(error.meta?.column ?? ""));
 
 const readUploadedFile = (req: Request): Express.Multer.File | undefined => {
   if (req.file) {
@@ -199,7 +206,7 @@ export const uploadContent = async (req: WalletSessionRequest, res: Response): P
 export const getContent = async (req: Request, res: Response): Promise<void> => {
   try {
     const { contentId } = req.params;
-    const baseSelect = {
+    const minimalSelect = {
       id: true,
       contentFieldId: true,
       creatorId: true,
@@ -213,9 +220,6 @@ export const getContent = async (req: Request, res: Response): Promise<void> => 
       sizeBytes: true,
       chunkSizeBytes: true,
       chunkCount: true,
-      expiresAt: true,
-      viewLimit: true,
-      views: true,
       createdAt: true,
       creator: {
         select: {
@@ -235,26 +239,38 @@ export const getContent = async (req: Request, res: Response): Promise<void> => 
         },
       },
     } as const;
+    const fullSelect = {
+      ...minimalSelect,
+      encryptedData: true,
+      expiresAt: true,
+      viewLimit: true,
+      views: true,
+    } as const;
 
     const content = await (async () => {
       try {
         return await prisma.content.findUnique({
           where: { id: contentId },
-          select: {
-            ...baseSelect,
-            encryptedData: true,
-          },
+          select: fullSelect,
         });
       } catch (error) {
-        if (!isMissingEncryptedDataColumnError(error)) {
+        if (!isMissingOptionalContentColumnError(error)) {
           throw error;
         }
 
         const fallbackContent = await prisma.content.findUnique({
           where: { id: contentId },
-          select: baseSelect,
+          select: minimalSelect,
         });
-        return fallbackContent ? { ...fallbackContent, encryptedData: null } : null;
+        return fallbackContent
+          ? {
+              ...fallbackContent,
+              encryptedData: null,
+              expiresAt: null,
+              viewLimit: null,
+              views: 0,
+            }
+          : null;
       }
     })();
 
