@@ -226,8 +226,14 @@ const verifyPaymentTxForSubscriptionFallback = async (input: {
     return false;
   }
 
+  const supportedPaymentTransitions = new Set([
+    "pay_and_subscribe",
+    "pay_and_subscribe_public",
+    "pay_and_subscribe_usdcx",
+    "pay_and_subscribe_usdcx_public",
+  ]);
   const paymentTransition = paymentTx.execution.transitions.find(
-    (entry) => entry.program === env.paymentProofProgramId && entry.function === "pay_and_subscribe_public",
+    (entry) => entry.program === env.paymentProofProgramId && supportedPaymentTransitions.has(entry.function),
   );
   if (!paymentTransition) {
     return false;
@@ -240,11 +246,13 @@ const verifyPaymentTxForSubscriptionFallback = async (input: {
 
   const paidCircleId = normalizeFieldId(paymentInputs[0]);
   const paidAmount = stripVisibilitySuffix(paymentInputs[1]);
-  const paidCreatorAddress = stripVisibilitySuffix(paymentInputs[3]);
+  const paidCreatorAddress = stripVisibilitySuffix(paymentInputs[paymentInputs.length - 1]);
+  const expectedAmountU64 = `${input.expectedPriceMicrocredits}u64`;
+  const expectedAmountU128 = `${input.expectedPriceMicrocredits}u128`;
 
   return (
     paidCircleId === normalizeFieldId(input.creatorFieldId) &&
-    paidAmount === `${input.expectedPriceMicrocredits}u64` &&
+    (paidAmount === expectedAmountU64 || paidAmount === expectedAmountU128) &&
     paidCreatorAddress.toLowerCase() === input.creatorAddress.trim().toLowerCase()
   );
 };
