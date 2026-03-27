@@ -1151,7 +1151,7 @@ export default function CreatorPage({ params }: CreatorPageProps) {
                   {hasSubscription && subscriptionTierName ? (
                     <span className="t-xs t-dim">Active tier: {subscriptionTierName}</span>
                   ) : null}
-                  <span className="t-xs t-dim">Private subscription invoice minted via {process.env.NEXT_PUBLIC_PAYMENT_PROOF_PROGRAM_ID?.trim() || "sub_invoice_v7_xwnxp.aleo"}</span>
+                  <span className="t-xs t-dim">Private subscription invoice minted via {process.env.NEXT_PUBLIC_PAYMENT_PROOF_PROGRAM_ID?.trim() || "sub_invoice_v8_xwnxp.aleo"}</span>
                 </div>
                 <p className="t-sm t-muted" style={{ marginBottom: "var(--s3)" }}>
                   A private Aleo invoice is minted to your wallet at payment time, then proved locally for access

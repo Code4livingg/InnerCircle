@@ -1,11 +1,10 @@
 import credits.aleo;
 import test_usdcx_stablecoin.aleo;
 
-program sub_invoice_v7_xwnxp.aleo {
+program sub_invoice_v8_xwnxp.aleo {
     @admin(address = "aleo1jvs27kq44uzn8ry5st8mrj6f2cjef93hst7p6ft0rq86gqg8w59q3vw492")
     async constructor() {}
 
-    const TREASURY_ADDRESS: address = aleo179k9x8m793zgxv5x5w00huef7q73uw0jfne6mtcgu574n5leuczqjd43yl;
     const BASIC_TIER_MIN_MICROCREDITS: u64 = 1_000_000u64;
     const PREMIUM_TIER_MIN_MICROCREDITS: u64 = 10_000_000u64;
     const BASIC_TIER_MIN_USDCX_SUBUNITS: u128 = 1_000_000u128;
@@ -94,9 +93,9 @@ program sub_invoice_v7_xwnxp.aleo {
         let receipt_hash: field = compute_receipt_hash(circle_id, salt);
         assert(payment.microcredits >= amount);
 
-        let (change, treasury_record) = credits.aleo/transfer_private(
+        let (change, creator_record) = credits.aleo/transfer_private(
             payment,
-            TREASURY_ADDRESS,
+            creator_address,
             amount,
         );
 
@@ -116,7 +115,7 @@ program sub_invoice_v7_xwnxp.aleo {
                 expires_at: expires_at,
             },
             change,
-            treasury_record,
+            creator_record,
             finalize_pay_and_subscribe(subscription_key, expires_at, salt_hash),
         );
     }
@@ -145,7 +144,7 @@ program sub_invoice_v7_xwnxp.aleo {
         let salt_hash: field = BHP256::hash_to_field(salt);
         let receipt_hash: field = compute_receipt_hash(circle_id, salt);
         let settle_payment: Future = credits.aleo/transfer_public_as_signer(
-            TREASURY_ADDRESS,
+            creator_address,
             amount,
         );
 
@@ -203,12 +202,12 @@ program sub_invoice_v7_xwnxp.aleo {
         let salt_hash: field = BHP256::hash_to_field(salt);
         let receipt_hash: field = compute_receipt_hash(circle_id, salt);
 
-        let (compliance_record, treasury_record, change_record, settle_payment): (
+        let (compliance_record, creator_record, change_record, settle_payment): (
             test_usdcx_stablecoin.aleo/ComplianceRecord,
             test_usdcx_stablecoin.aleo/Token,
             test_usdcx_stablecoin.aleo/Token,
             Future
-        ) = test_usdcx_stablecoin.aleo/transfer_private(TREASURY_ADDRESS, amount, payment, proofs);
+        ) = test_usdcx_stablecoin.aleo/transfer_private(creator_address, amount, payment, proofs);
 
         return (
             SubscriptionInvoice {
@@ -225,7 +224,7 @@ program sub_invoice_v7_xwnxp.aleo {
                 tier: tier,
                 expires_at: expires_at,
             },
-            treasury_record,
+            creator_record,
             change_record,
             compliance_record,
             finalize_pay_sub_usdcx(settle_payment, subscription_key, expires_at, salt_hash),
@@ -258,7 +257,7 @@ program sub_invoice_v7_xwnxp.aleo {
         let salt_hash: field = BHP256::hash_to_field(salt);
         let receipt_hash: field = compute_receipt_hash(circle_id, salt);
         let settle_payment: Future = test_usdcx_stablecoin.aleo/transfer_public_as_signer(
-            TREASURY_ADDRESS,
+            creator_address,
             amount,
         );
 

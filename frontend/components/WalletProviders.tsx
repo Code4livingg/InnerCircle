@@ -30,7 +30,7 @@ const PROGRAM_IDS = uniquePrograms([
     process.env.NEXT_PUBLIC_PAYMENT_PROOF_PROGRAM_ID,
     process.env.NEXT_PUBLIC_SUBSCRIPTION_PROGRAM_ID,
     process.env.NEXT_PUBLIC_TIP_PROGRAM_ID,
-    "sub_invoice_v7_xwnxp.aleo",
+    "sub_invoice_v8_xwnxp.aleo",
     "sub_pay_v6_xwnxp.aleo",
     "tip_pay_v4_xwnxp.aleo",
     "test_usdcx_stablecoin.aleo",

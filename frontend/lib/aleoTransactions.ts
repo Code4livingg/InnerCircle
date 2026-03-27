@@ -9,7 +9,7 @@ const ALEO_EXPLORER_API =
 const ALEO_EXPLORER_NETWORK = "testnet";
 const TIP_PROGRAM_ID = process.env.NEXT_PUBLIC_TIP_PROGRAM_ID?.trim() || "tip_pay_v4_xwnxp.aleo";
 const PAYMENT_PROOF_PROGRAM_ID =
-  process.env.NEXT_PUBLIC_PAYMENT_PROOF_PROGRAM_ID?.trim() || "sub_invoice_v7_xwnxp.aleo";
+  process.env.NEXT_PUBLIC_PAYMENT_PROOF_PROGRAM_ID?.trim() || "sub_invoice_v8_xwnxp.aleo";
 const SUBSCRIPTION_PROGRAM_ID =
   process.env.NEXT_PUBLIC_SUBSCRIPTION_PROGRAM_ID?.trim() || "sub_pay_v6_xwnxp.aleo";
 

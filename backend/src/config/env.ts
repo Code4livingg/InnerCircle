@@ -46,7 +46,7 @@ const envSchema = z.object({
   ALEO_PRIVATE_KEY: z.string().min(20).optional(),
   ALEO_NETWORK: z.string().default("testnet"),
   ALEO_ENDPOINT: z.string().url(),
-  PAYMENT_PROOF_PROGRAM_ID: z.string().default("sub_invoice_v7_xwnxp.aleo"),
+  PAYMENT_PROOF_PROGRAM_ID: z.string().default("sub_invoice_v8_xwnxp.aleo"),
   SUBSCRIPTION_PROGRAM_ID: z.string().default("sub_pay_v6_xwnxp.aleo"),
   PPV_PROGRAM_ID: z.string().default("ppv_pay_v5_xwnxp.aleo"),
   CREATOR_REGISTRY_PROGRAM_ID: z.string().default("creator_reg_v5_xwnxp.aleo"),

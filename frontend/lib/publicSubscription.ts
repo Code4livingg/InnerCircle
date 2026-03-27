@@ -4,7 +4,7 @@ import type { WalletContextState } from "@/lib/walletContext";
 import { executeProgramTransaction } from "@/lib/aleoTransactions";
 
 const PAYMENT_PROOF_PROGRAM_ID =
-  process.env.NEXT_PUBLIC_PAYMENT_PROOF_PROGRAM_ID?.trim() || "sub_invoice_v7_xwnxp.aleo";
+  process.env.NEXT_PUBLIC_PAYMENT_PROOF_PROGRAM_ID?.trim() || "sub_invoice_v8_xwnxp.aleo";
 
 const normalizeFieldId = (value: string): string => value.trim().replace(/field$/i, "");
 const toFieldLiteral = (value: string): string => `${normalizeFieldId(value)}field`;

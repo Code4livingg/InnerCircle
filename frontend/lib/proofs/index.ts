@@ -16,7 +16,7 @@ const PAYMENT_PROOF_PREFIX = "innercircle_payment_proof_v1:";
 const SUBSCRIPTION_INVOICE_PREFIX = "innercircle_subscription_invoice_v1:";
 const PENDING_SUBSCRIPTION_PREFIX = "innercircle_pending_subscription_v1:";
 const PAYMENT_PROOF_PROGRAM_ID =
-  process.env.NEXT_PUBLIC_PAYMENT_PROOF_PROGRAM_ID?.trim() || "sub_invoice_v7_xwnxp.aleo";
+  process.env.NEXT_PUBLIC_PAYMENT_PROOF_PROGRAM_ID?.trim() || "sub_invoice_v8_xwnxp.aleo";
 const USDCX_PROGRAM_ID =
   process.env.NEXT_PUBLIC_USDCX_PROGRAM_ID?.trim() || "test_usdcx_stablecoin.aleo";
 const IS_LEGACY_PAYMENT_PROOF_PROGRAM = /^sub_invoice_v2_xwnxp\.aleo$/i.test(PAYMENT_PROOF_PROGRAM_ID);
