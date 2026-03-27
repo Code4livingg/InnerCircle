@@ -1,0 +1,2 @@
+ALTER TABLE "Content"
+ADD COLUMN IF NOT EXISTS "encryptedData" TEXT;

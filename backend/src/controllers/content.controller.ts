@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../db/prisma.js";
 import { sha256Hex } from "../utils/crypto.js";
@@ -34,6 +35,11 @@ const updateSchema = z.object({
 });
 
 const walletHash = (address: string): string => sha256Hex(address.toLowerCase());
+
+const isMissingEncryptedDataColumnError = (error: unknown): boolean =>
+  error instanceof Prisma.PrismaClientKnownRequestError &&
+  error.code === "P2022" &&
+  String(error.meta?.column ?? "") === "Content.encryptedData";
 
 const readUploadedFile = (req: Request): Express.Multer.File | undefined => {
   if (req.file) {
@@ -191,10 +197,9 @@ export const uploadContent = async (req: WalletSessionRequest, res: Response): P
 };
 
 export const getContent = async (req: Request, res: Response): Promise<void> => {
-  const { contentId } = req.params;
-  const content = await prisma.content.findUnique({
-    where: { id: contentId },
-    select: {
+  try {
+    const { contentId } = req.params;
+    const baseSelect = {
       id: true,
       contentFieldId: true,
       creatorId: true,
@@ -208,7 +213,6 @@ export const getContent = async (req: Request, res: Response): Promise<void> => 
       sizeBytes: true,
       chunkSizeBytes: true,
       chunkCount: true,
-      encryptedData: true,
       expiresAt: true,
       viewLimit: true,
       views: true,
@@ -230,15 +234,39 @@ export const getContent = async (req: Request, res: Response): Promise<void> => 
           priceMicrocredits: true,
         },
       },
-    },
-  });
+    } as const;
 
-  if (!content) {
-    res.status(404).json({ error: "Content not found" });
-    return;
+    const content = await (async () => {
+      try {
+        return await prisma.content.findUnique({
+          where: { id: contentId },
+          select: {
+            ...baseSelect,
+            encryptedData: true,
+          },
+        });
+      } catch (error) {
+        if (!isMissingEncryptedDataColumnError(error)) {
+          throw error;
+        }
+
+        const fallbackContent = await prisma.content.findUnique({
+          where: { id: contentId },
+          select: baseSelect,
+        });
+        return fallbackContent ? { ...fallbackContent, encryptedData: null } : null;
+      }
+    })();
+
+    if (!content) {
+      res.status(404).json({ error: "Content not found" });
+      return;
+    }
+
+    res.json({ content });
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message });
   }
-
-  res.json({ content });
 };
 
 export const updateContent = async (req: WalletSessionRequest, res: Response): Promise<void> => {
