@@ -23,12 +23,14 @@ import {
   type CreatorPaymentAsset,
   type CreatorPaymentVisibility,
   activateSubscription,
+  createSubscription,
   createAnonymousTip,
   createTip,
   fetchCreatorByHandle,
   fetchSubscriptionStatus,
   fetchSubscriptionTiers,
   fetchTipLeaderboard,
+  type SubscriptionExecutionProof,
   type SubscriptionTier,
   type TipLeaderboardEntry,
   type CreatorWithContent,
@@ -80,6 +82,37 @@ const runWithPendingRetry = async <T,>(fn: () => Promise<T>): Promise<T> => {
   }
 
   throw new Error("Timed out waiting for on-chain confirmation.");
+};
+
+const isRetryableSubscriptionSyncError = (error: unknown): boolean => {
+  if (error instanceof ApiError) {
+    return error.code === "TX_PENDING" || error.status >= 500;
+  }
+
+  const message = (error as Error)?.message?.toLowerCase() ?? "";
+  return (
+    message.includes("failed to fetch") ||
+    message.includes("load failed") ||
+    message.includes("networkerror")
+  );
+};
+
+const runWithSubscriptionSyncRetry = async <T,>(fn: () => Promise<T>): Promise<T> => {
+  const maxAttempts = 12;
+
+  for (let i = 0; i < maxAttempts; i += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      const isLastAttempt = i === maxAttempts - 1;
+      if (!isRetryableSubscriptionSyncError(error) || isLastAttempt) {
+        throw error;
+      }
+      await wait(3000);
+    }
+  }
+
+  throw new Error("Timed out waiting for backend subscription sync.");
 };
 
 const isTipAlreadyRecorded = (error: unknown): boolean =>
@@ -615,41 +648,72 @@ export default function CreatorPage({ params }: CreatorPageProps) {
       const syncToBackend = async (
         paymentTxId: string,
         verifyTxId: string,
+        proof: SubscriptionExecutionProof | null,
+        nullifier: string,
         signer: string,
-      ): Promise<void> => {
-        const attemptSync = async (): Promise<void> => {
+      ): Promise<{ expiresAt: string; tierId: string | null; tierName: string | null; priceMicrocredits: string }> => {
+        const attemptSync = async (): Promise<{
+          expiresAt: string;
+          tierId: string | null;
+          tierName: string | null;
+          priceMicrocredits: string;
+        }> => {
           const walletToken = await getWalletSessionToken(wallet);
-          await activateSubscription(
+          if (proof) {
+            const synced = await createSubscription(
+              {
+                kind: "subscription",
+                executionProof: proof,
+                nullifier,
+                circleId: creator.creatorFieldId,
+                tierId: selectedTier?.id,
+                paymentTxId,
+              },
+              walletToken,
+            );
+            return {
+              expiresAt: synced.expiresAt,
+              tierId: synced.tierId,
+              tierName: synced.tierName,
+              priceMicrocredits: synced.priceMicrocredits,
+            };
+          }
+
+          const activated = await activateSubscription(
             {
               txId: verifyTxId,
               paymentTxId,
               circleId: creator.creatorFieldId,
+              nullifier,
               tierId: selectedTier?.id,
               address: signer,
             },
             walletToken,
           );
+
+          return {
+            expiresAt: activated.expiresAt,
+            tierId: selectedTier?.id ?? null,
+            tierName: selectedTier?.tierName ?? null,
+            priceMicrocredits: selectedTier?.priceMicrocredits ?? creator.subscriptionPriceMicrocredits ?? "0",
+          };
         };
 
-        try {
-          await attemptSync();
-        } catch (error) {
-          console.warn("[InnerCircle] backend subscription sync failed, retrying once", error);
-          await wait(3000);
-          try {
-            await attemptSync();
-          } catch (retryError) {
-            console.warn("[InnerCircle] backend subscription sync retry failed", retryError);
-          }
-        }
+        return runWithSubscriptionSyncRetry(attemptSync);
       };
 
       const runSubscriptionAttempt = async (
         feePreference: FeePreference,
-      ): Promise<{ paymentTxId: string; verifyTxId: string; route: SubscriptionPaymentRoute }> => {
+      ): Promise<{
+        paymentTxId: string;
+        verifyTxId: string;
+        route: SubscriptionPaymentRoute;
+        proof: SubscriptionExecutionProof | null;
+        nullifier: string;
+      }> => {
         await ensureSignerUnchanged();
         setSubscriptionProgressStep(2);
-        const { transactionId, verifyTransactionId, route, fallbackReceipt } = await payAndSubscribe({
+        const { invoice, proof, transactionId, verifyTransactionId, route, fallbackReceipt } = await payAndSubscribe({
           wallet,
           circleId: creator.creatorFieldId,
           creatorAddress: creator.walletAddress,
@@ -711,11 +775,23 @@ export default function CreatorPage({ params }: CreatorPageProps) {
           setSubscribeProgressLabel("Wallet transcript API unavailable. Finalizing with on-chain tx verification...");
         }
 
-        return { paymentTxId: transactionId, verifyTxId: resolvedVerifyTxId, route };
+        return {
+          paymentTxId: transactionId,
+          verifyTxId: resolvedVerifyTxId,
+          route,
+          proof,
+          nullifier: invoice.nullifier,
+        };
       };
 
       const isShieldWallet = isShieldWalletAdapter(wallet);
-      let result: { paymentTxId: string; verifyTxId: string; route: SubscriptionPaymentRoute };
+      let result: {
+        paymentTxId: string;
+        verifyTxId: string;
+        route: SubscriptionPaymentRoute;
+        proof: SubscriptionExecutionProof | null;
+        nullifier: string;
+      };
 
       try {
         result = await runSubscriptionAttempt("auto");
@@ -739,12 +815,19 @@ export default function CreatorPage({ params }: CreatorPageProps) {
       }
 
       await ensureSignerUnchanged();
-      const optimisticActiveUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      setSubscribeProgressLabel("Syncing subscription with backend...");
+      const syncedSubscription = await syncToBackend(
+        result.paymentTxId,
+        result.verifyTxId,
+        result.proof,
+        result.nullifier,
+        signerAddress,
+      );
       setSubscribeTxId(result.paymentTxId);
       setHasSubscription(true);
-      setSubscriptionActiveUntil(optimisticActiveUntil);
-      setSubscriptionTierName(selectedTier?.tierName ?? null);
-      setActiveTierId(selectedTier?.id ?? null);
+      setSubscriptionActiveUntil(syncedSubscription.expiresAt);
+      setSubscriptionTierName(syncedSubscription.tierName ?? selectedTier?.tierName ?? null);
+      setActiveTierId(syncedSubscription.tierId ?? selectedTier?.id ?? null);
       setSubscriptionProgressStep(6);
       setSubscribeProgressLabel(null);
       setMembershipProofLabel(
@@ -755,12 +838,11 @@ export default function CreatorPage({ params }: CreatorPageProps) {
       setSubscribeState("success");
       persistSubscriptionStatus(creator.handle, signerAddress, {
         active: true,
-        activeUntil: optimisticActiveUntil,
-        tierName: selectedTier?.tierName ?? null,
-        tierId: selectedTier?.id ?? null,
-        tierPriceMicrocredits: selectedTier?.priceMicrocredits ?? creator.subscriptionPriceMicrocredits ?? null,
+        activeUntil: syncedSubscription.expiresAt,
+        tierName: syncedSubscription.tierName ?? selectedTier?.tierName ?? null,
+        tierId: syncedSubscription.tierId ?? selectedTier?.id ?? null,
+        tierPriceMicrocredits: syncedSubscription.priceMicrocredits ?? selectedTier?.priceMicrocredits ?? creator.subscriptionPriceMicrocredits ?? null,
       });
-      void syncToBackend(result.paymentTxId, result.verifyTxId, signerAddress);
     } catch (err) {
       const rawMessage = (err as Error).message || "Subscription transaction failed.";
       if (/already exists in the ledger/i.test(rawMessage)) {

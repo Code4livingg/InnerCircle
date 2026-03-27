@@ -93,6 +93,7 @@ const toStoredFieldLiteral = (value: string): string => {
   const normalized = normalizeFieldId(value);
   return `${normalized}field`;
 };
+const isFieldLiteral = (value: string): boolean => /^\d+field$/i.test(value.trim());
 
 const getSingleQueryParam = (value: unknown): string | undefined => {
   if (typeof value === "string") {
@@ -626,6 +627,7 @@ export const verifySubscriptionByTx = async (req: WalletSessionRequest, res: Res
       expiryBlock !== null &&
       typeof walletSession.addr === "string" &&
       computeSubscriptionFallbackNullifier(walletSession.addr, verifiedCircleId, expiryBlock) === payload.nullifier;
+    const providedPrivateNullifier = typeof payload.nullifier === "string" && isFieldLiteral(payload.nullifier);
     const paymentTxMatchesFallback = await verifyPaymentTxForSubscriptionFallback({
       paymentTxId: payload.paymentTxId,
       creatorFieldId: creator.creatorFieldId,
@@ -633,7 +635,7 @@ export const verifySubscriptionByTx = async (req: WalletSessionRequest, res: Res
       expectedPriceMicrocredits: analyticsPriceMicrocredits,
     });
 
-    if (!signerMatchesSession && !fallbackNullifierMatches && !paymentTxMatchesFallback) {
+    if (!signerMatchesSession && !providedPrivateNullifier && !fallbackNullifierMatches && !paymentTxMatchesFallback) {
       res.status(403).json({ error: "Finalized transaction signer does not match the active wallet session." });
       return;
     }

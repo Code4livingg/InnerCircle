@@ -66,6 +66,13 @@ const postJson = async <T>(path: string, body: unknown): Promise<T> => {
   return (await res.json()) as T;
 };
 
+const wait = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+const isRetryableGetStatus = (status: number): boolean => status === 502 || status === 503 || status === 504;
+
 const postJsonWithHeaders = async <T>(path: string, body: unknown, headers: HeadersInit): Promise<T> => {
   const res = await fetch(toApiUrl(path), {
     method: "POST",
@@ -131,22 +138,56 @@ const deleteJsonWithHeaders = async <T>(path: string, headers: HeadersInit): Pro
 };
 
 const getJson = async <T>(path: string): Promise<T> => {
-  const res = await fetch(toApiUrl(path), { cache: "no-store" });
-  if (!res.ok) {
-    return throwApiError(res);
+  const attempts = 3;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const res = await fetch(toApiUrl(path), { cache: "no-store" });
+      if (!res.ok) {
+        if (attempt < attempts - 1 && isRetryableGetStatus(res.status)) {
+          await wait(400 * (attempt + 1));
+          continue;
+        }
+        return throwApiError(res);
+      }
+      return (await res.json()) as T;
+    } catch (error) {
+      if (attempt === attempts - 1) {
+        throw error;
+      }
+      await wait(400 * (attempt + 1));
+    }
   }
-  return (await res.json()) as T;
+
+  throw new Error("GET request exhausted retry attempts.");
 };
 
 const getJsonWithHeaders = async <T>(path: string, headers: HeadersInit): Promise<T> => {
-  const res = await fetch(toApiUrl(path), {
-    cache: "no-store",
-    headers,
-  });
-  if (!res.ok) {
-    return throwApiError(res);
+  const attempts = 3;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const res = await fetch(toApiUrl(path), {
+        cache: "no-store",
+        headers,
+      });
+      if (!res.ok) {
+        if (attempt < attempts - 1 && isRetryableGetStatus(res.status)) {
+          await wait(400 * (attempt + 1));
+          continue;
+        }
+        return throwApiError(res);
+      }
+      return (await res.json()) as T;
+    } catch (error) {
+      if (attempt === attempts - 1) {
+        throw error;
+      }
+      await wait(400 * (attempt + 1));
+    }
   }
-  return (await res.json()) as T;
+
+  throw new Error("GET request exhausted retry attempts.");
 };
 
 export interface Creator {
