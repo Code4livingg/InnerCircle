@@ -7,6 +7,7 @@ import { PuzzleWalletAdapter } from "@provablehq/aleo-wallet-adaptor-puzzle";
 import { Network } from "@provablehq/aleo-types";
 import { DecryptPermission } from "@provablehq/aleo-wallet-adaptor-core";
 import { ReactNode } from "react";
+import { useAutoAnonRegistration } from "@/features/anonymous/useAutoAnonRegistration";
 
 const uniquePrograms = (values: Array<string | undefined>): string[] => {
     const seen = new Set<string>();
@@ -48,6 +49,11 @@ const wallets = [
     new LeoWalletAdapter(),
 ];
 
+function AnonymousSessionBootstrap() {
+    useAutoAnonRegistration();
+    return null;
+}
+
 export function WalletProviders({ children }: { children: ReactNode }) {
     return (
         <AleoWalletProvider
@@ -58,6 +64,7 @@ export function WalletProviders({ children }: { children: ReactNode }) {
             autoConnect={false}
             onError={(error) => console.warn("Wallet error:", error)}
         >
+            <AnonymousSessionBootstrap />
             {children}
         </AleoWalletProvider>
     );

@@ -1,4 +1,5 @@
 import { toApiUrl } from "./apiBase";
+import { getOrCreateSessionId, readAnonymousMode } from "../features/anonymous/storage";
 
 interface ApiErrorPayload {
   error?: string;
@@ -16,6 +17,66 @@ export class ApiError extends Error {
     this.code = code;
   }
 }
+
+interface StoredWalletSession {
+  token: string;
+  expiresAt: number;
+}
+
+const WALLET_SESSION_KEY_PREFIX = "innercircle_wallet_session_v1:";
+
+const readLatestWalletSessionToken = (): string | null => {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  let latestSession: StoredWalletSession | null = null;
+  const now = Math.floor(Date.now() / 1000) + 30;
+
+  for (let index = 0; index < window.sessionStorage.length; index += 1) {
+    const key = window.sessionStorage.key(index);
+    if (!key || !key.startsWith(WALLET_SESSION_KEY_PREFIX)) {
+      continue;
+    }
+
+    const raw = window.sessionStorage.getItem(key);
+    if (!raw) {
+      continue;
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as Partial<StoredWalletSession>;
+      if (typeof parsed.token !== "string" || typeof parsed.expiresAt !== "number" || parsed.expiresAt <= now) {
+        continue;
+      }
+
+      if (!latestSession || parsed.expiresAt > latestSession.expiresAt) {
+        latestSession = {
+          token: parsed.token,
+          expiresAt: parsed.expiresAt,
+        };
+      }
+    } catch {
+      // Ignore malformed cached sessions.
+    }
+  }
+
+  return latestSession?.token ?? null;
+};
+
+const getContextHeaders = (): Record<string, string> => {
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  if (readAnonymousMode()) {
+    const sessionId = getOrCreateSessionId();
+    return sessionId ? { "X-Anonymous-Session": sessionId } : {};
+  }
+
+  const walletToken = readLatestWalletSessionToken();
+  return walletToken ? { Authorization: `Bearer ${walletToken}` } : {};
+};
 
 const throwApiError = async (res: Response): Promise<never> => {
   let payload: ApiErrorPayload = {};
@@ -55,7 +116,10 @@ const throwApiError = async (res: Response): Promise<never> => {
 const postJson = async <T>(path: string, body: unknown): Promise<T> => {
   const res = await fetch(toApiUrl(path), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...getContextHeaders(),
+    },
     body: JSON.stringify(body),
   });
 
@@ -77,6 +141,7 @@ const postJsonWithHeaders = async <T>(path: string, body: unknown, headers: Head
   const res = await fetch(toApiUrl(path), {
     method: "POST",
     headers: {
+      ...getContextHeaders(),
       "Content-Type": "application/json",
       ...headers,
     },
@@ -94,6 +159,7 @@ const patchJsonWithHeaders = async <T>(path: string, body: unknown, headers: Hea
   const res = await fetch(toApiUrl(path), {
     method: "PATCH",
     headers: {
+      ...getContextHeaders(),
       "Content-Type": "application/json",
       ...headers,
     },
@@ -111,6 +177,7 @@ const putJsonWithHeaders = async <T>(path: string, body: unknown, headers: Heade
   const res = await fetch(toApiUrl(path), {
     method: "PUT",
     headers: {
+      ...getContextHeaders(),
       "Content-Type": "application/json",
       ...headers,
     },
@@ -127,7 +194,10 @@ const putJsonWithHeaders = async <T>(path: string, body: unknown, headers: Heade
 const deleteJsonWithHeaders = async <T>(path: string, headers: HeadersInit): Promise<T> => {
   const res = await fetch(toApiUrl(path), {
     method: "DELETE",
-    headers,
+    headers: {
+      ...getContextHeaders(),
+      ...headers,
+    },
   });
 
   if (!res.ok) {
@@ -142,7 +212,10 @@ const getJson = async <T>(path: string): Promise<T> => {
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      const res = await fetch(toApiUrl(path), { cache: "no-store" });
+      const res = await fetch(toApiUrl(path), {
+        cache: "no-store",
+        headers: getContextHeaders(),
+      });
       if (!res.ok) {
         if (attempt < attempts - 1 && isRetryableGetStatus(res.status)) {
           await wait(400 * (attempt + 1));
@@ -169,7 +242,10 @@ const getJsonWithHeaders = async <T>(path: string, headers: HeadersInit): Promis
     try {
       const res = await fetch(toApiUrl(path), {
         cache: "no-store",
-        headers,
+        headers: {
+          ...getContextHeaders(),
+          ...headers,
+        },
       });
       if (!res.ok) {
         if (attempt < attempts - 1 && isRetryableGetStatus(res.status)) {
@@ -254,7 +330,7 @@ export interface ContentDetails extends Content {
     handle: string;
     displayName: string | null;
     creatorFieldId: string;
-    walletAddress: string;
+    walletAddress: string | null;
     subscriptionPriceMicrocredits: string;
     isVerified: boolean;
   };
@@ -616,6 +692,10 @@ export type CreateSessionRequest =
     proof: string;
   }
   | {
+    mode: "subscription-anon";
+    creatorHandle: string;
+  }
+  | {
     // Direct: issue session from the buy_content purchase tx — no prove_ call needed
     mode: "ppv-direct";
     contentId: string;
@@ -633,7 +713,7 @@ export type CreateSessionRequest =
 
 export interface StartSessionRequest {
   contentId: string;
-  walletAddress: string;
+  walletAddress?: string;
   sessionToken: string;
 }
 

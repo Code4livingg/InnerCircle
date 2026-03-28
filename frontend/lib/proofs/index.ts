@@ -754,13 +754,22 @@ const parseSubscriptionInvoiceRecord = (
 };
 
 /**
- * Builds the same replay key the backend uses for cached subscription invoices.
+ * Derives the invoice nullifier using the same BHP256 replay-key hash the Aleo
+ * contract uses in `invoice_nullifier`.
  */
 export const computeSubscriptionNullifier = async (invoiceRecord: string): Promise<string> => {
   const parsed = parseSubscriptionInvoiceRecord(invoiceRecord);
-  return sha256Hex(
-    `${parsed.owner.trim().toLowerCase()}:${normalizeFieldId(parsed.circleId)}:${parsed.expiresAt}`,
+  const { BHP256, Plaintext } = await import("@provablehq/wasm");
+  const replayKeyPlaintext = Plaintext.fromString(
+    `{
+      invoice_owner: ${parsed.owner.trim().toLowerCase()},
+      circle_id: ${toFieldLiteral(parsed.circleId)},
+      expires_at: ${parsed.expiresAt}u32,
+      salt: ${toFieldLiteral(parsed.salt)}
+    }`,
   );
+  const hasher = new BHP256();
+  return hasher.hash(replayKeyPlaintext.toBitsLe()).toString();
 };
 
 const tryParseStoredReceiptMeta = (raw: string | null): StoredSubscriptionInvoiceMeta | null => {
@@ -1373,6 +1382,26 @@ export const readSubscriptionInvoiceReceipt = (circleId: string): SubscriptionIn
     storage.getItem(getSubscriptionInvoiceStorageKey(circleId)),
     storage.getItem(getSubscriptionInvoiceMetaStorageKey(circleId)),
   );
+};
+
+export const listStoredSubscriptionInvoiceReceipts = (): SubscriptionInvoiceReceipt[] => {
+  const storage = getStorage();
+  if (!storage) return [];
+
+  const receipts: SubscriptionInvoiceReceipt[] = [];
+  for (let index = 0; index < storage.length; index += 1) {
+    const key = storage.key(index);
+    if (!key || !key.startsWith(SUBSCRIPTION_INVOICE_PREFIX) || key.endsWith(":meta")) {
+      continue;
+    }
+
+    const parsed = parseStoredReceipt(storage.getItem(key), storage.getItem(`${key}:meta`));
+    if (parsed) {
+      receipts.push(parsed);
+    }
+  }
+
+  return receipts;
 };
 
 /**

@@ -2,20 +2,28 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { anonLabelFromSession } from "./identity";
-import { getOrCreateSessionId, onAnonymousModeChange, readAnonymousMode, writeAnonymousMode } from "./storage";
+import {
+  getOrCreateSessionId,
+  onAnonymousModeChange,
+  readAnonymousMode,
+  readAnonymousRegistrationStatus,
+  writeAnonymousMode,
+} from "./storage";
 
 export const useAnonymousMode = () => {
   const [enabled, setEnabled] = useState(false);
   const [sessionId, setSessionId] = useState<string>("");
+  const [registrationStatus, setRegistrationStatus] = useState(() => readAnonymousRegistrationStatus());
 
   useEffect(() => {
-    setEnabled(readAnonymousMode());
-    setSessionId(getOrCreateSessionId());
-
-    return onAnonymousModeChange(() => {
+    const syncState = () => {
       setEnabled(readAnonymousMode());
       setSessionId(getOrCreateSessionId());
-    });
+      setRegistrationStatus(readAnonymousRegistrationStatus());
+    };
+
+    syncState();
+    return onAnonymousModeChange(syncState);
   }, []);
 
   const toggle = useCallback((next?: boolean) => {
@@ -28,6 +36,9 @@ export const useAnonymousMode = () => {
     enabled,
     sessionId,
     anonLabel: anonLabelFromSession(sessionId),
+    registrationStatus: registrationStatus.state,
+    registrationMessage: registrationStatus.message,
+    activeRegistrationCount: registrationStatus.activeCircleIds.length,
     toggle,
   };
 };
