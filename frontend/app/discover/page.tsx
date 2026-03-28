@@ -226,6 +226,7 @@ export default function DiscoverPage() {
         filteredCreators.length === 0 &&
         (activeView === "Creators" || filteredPpvContents.length === 0);
 
+
     return (
         <main className="disc-page">
             {/* Glow */}
@@ -242,7 +243,7 @@ export default function DiscoverPage() {
                     </div>
                     <h1 className="disc-hero__title">Discover Private Creators</h1>
                     <p className="disc-hero__desc">
-                        Browse subscription creators, live rooms, and direct pay-per-view drops from one feed.
+                        Exclusive content. Direct access. Private communities.
                     </p>
                 </section>
 
@@ -478,98 +479,121 @@ export default function DiscoverPage() {
                         )}
                     </div>
                 )}
-
                 {/* Creator Feed */}
                 {showCreatorsSection && !loading && !error && filteredCreators.length > 0 && (
                     <section className="disc-section disc-feed-shell ic-fade-up ic-delay-200">
                         <div className="disc-section__head">
                             <div className="disc-section__copy">
-                                <p className="disc-section__eyebrow">Creator Feed</p>
-                                <h2 className="disc-section__title">Browse pages like a feed, not a directory.</h2>
+                                <p className="disc-section__eyebrow">Creators</p>
+                                <h2 className="disc-section__title">Find your next private community.</h2>
                                 <p className="disc-section__desc">
-                                    Each row previews a creator page with pricing, bio, and a direct path into their private wall.
+                                    Browse premium creators offering exclusive wallet-gated content, live rooms, and direct unlocks.
                                 </p>
                             </div>
                         </div>
 
-                        <div className="disc-feed">
-                            {filteredCreators.map((creator) => {
-                                const initials = getInitials(creator);
-                                const creatorName = creator.displayName ?? creator.handle;
-                                const previewCopy = getCreatorPreviewCopy(creator);
-                                const description =
-                                    creator.bio?.trim() || "Wallet-gated creator page with private drops, live rooms, and direct unlocks.";
-                                const followerLabel = formatFollowerLabel(creator.followerCount);
-                                const joinedLabel = formatTimestamp(creator.createdAt);
-                                const subscriptionLabel = formatSubscriptionPrice(creator.subscriptionPriceMicrocredits);
-                                const isPaidMembership =
-                                    creator.subscriptionPriceMicrocredits !== null && Number(creator.subscriptionPriceMicrocredits) > 0;
+                        {filteredCreators.length > 0 && (
+                            <div className="disc-feed" style={{ marginBottom: "24px" }}>
+                                {/* FEATURED CREATOR (First in list) */}
+                                {(() => {
+                                    const creator = filteredCreators[0];
+                                    const initials = getInitials(creator);
+                                    const creatorName = creator.displayName ?? creator.handle;
+                                    const previewCopy = getCreatorPreviewCopy(creator);
+                                    const description = creator.bio?.trim() || "Wallet-gated premium community with private drops and live access.";
+                                    const followerLabel = formatFollowerLabel(creator.followerCount);
+                                    const joinedLabel = formatTimestamp(creator.createdAt);
+                                    const isPaidMembership = creator.subscriptionPriceMicrocredits !== null && Number(creator.subscriptionPriceMicrocredits) > 0;
 
-                            return (
-                                <Link key={creator.id} href={`/creator/${creator.handle}`} className="disc-post-link">
-                                    <article className="disc-post disc-post--creator">
-                                        <div className="disc-post__cover">
-                                            <div className="disc-post__badges">
-                                                <span className="disc-post__pill">Creator Feed</span>
-                                                {creator.category ? <span className="disc-post__pill">{creator.category}</span> : null}
-                                                {creator.isVerified ? (
-                                                    <span className="disc-post__pill disc-post__pill--verified">Verified</span>
-                                                ) : null}
-                                            </div>
-
-                                            <div className="disc-post__hero">
-                                                <div className="disc-post__headline">
-                                                    <p className="disc-post__kicker">Fresh page preview</p>
-                                                    <h3 className="disc-post__cover-title">{creatorName}</h3>
-                                                    <p className="disc-post__cover-copy">{previewCopy}</p>
-                                                </div>
-                                                <div className="disc-post__price disc-post__price--creator">{subscriptionLabel}</div>
-                                            </div>
-
-                                            <div className="disc-post__creator-strip">
-                                                <span>{followerLabel}</span>
-                                                <span>{isPaidMembership ? "Monthly subscription" : "Free page"}</span>
-                                                <span>Joined {joinedLabel}</span>
-                                            </div>
-                                        </div>
-
-                                        <div className="disc-post__body">
-                                            <div className="disc-post__header">
-                                                <div className="disc-post__avatar">{initials}</div>
-                                                <div className="disc-post__creator">
-
-                                                    <div className="disc-post__creator-row">
-                                                        <h4 className="disc-post__creator-name">{creatorName}</h4>
-                                                        {creator.isVerified ? (
-                                                            <span className="disc-post__verified">Verified</span>
-                                                        ) : null}
+                                    return (
+                                        <Link href={`/creator/${creator.handle}`} className="disc-post-link">
+                                            <article className="disc-post disc-post--creator" style={{ boxShadow: "0 0 40px rgba(255,59,59,0.05)" }}>
+                                                <div className="disc-post__cover">
+                                                    <div className="disc-post__badges">
+                                                        <span className="disc-post__pill" style={{ borderColor: "#ff3b3b", color: "#ff3b3b", background: "rgba(255,59,59,0.1)" }}>Featured</span>
+                                                        {creator.category ? <span className="disc-post__pill">{creator.category}</span> : null}
+                                                        {creator.isVerified ? <span className="disc-post__pill disc-post__pill--verified">Verified</span> : null}
                                                     </div>
-                                                    <p className="disc-post__creator-handle">
-                                                        @{creator.handle} / {joinedLabel}
+
+                                                    <div className="disc-post__hero">
+                                                        <div className="disc-post__headline">
+                                                            <p className="disc-post__kicker">Premium Creator</p>
+                                                            <h3 className="disc-post__cover-title">{creatorName}</h3>
+                                                            <p className="disc-post__cover-copy">{previewCopy}</p>
+                                                        </div>
+                                                        <div className="disc-post__price disc-post__price--creator">
+                                                            {formatSubscriptionPrice(creator.subscriptionPriceMicrocredits)}
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="disc-post__creator-strip">
+                                                        <span>{followerLabel}</span>
+                                                        <span>Joined {joinedLabel}</span>
+                                                    </div>
+                                                </div>
+
+                                                <div className="disc-post__body">
+                                                    <div className="disc-post__header">
+                                                        <div className="disc-post__avatar">{initials}</div>
+                                                        <div className="disc-post__creator">
+                                                            <div className="disc-post__creator-row">
+                                                                <h4 className="disc-post__creator-name">{creatorName}</h4>
+                                                                {creator.isVerified ? <span className="disc-post__verified">Verified</span> : null}
+                                                            </div>
+                                                            <p className="disc-post__creator-handle">@{creator.handle}</p>
+                                                        </div>
+                                                    </div>
+
+                                                    <p className="disc-post__description">
+                                                        {description.length > 220 ? `${description.slice(0, 220)}...` : description}
                                                     </p>
+
+                                                    <div className="disc-post__footer">
+                                                        <div className="disc-post__tags">
+                                                            <span className="disc-post__tag">{followerLabel}</span>
+                                                            <span className="disc-post__tag">{isPaidMembership ? "Premium Access" : "Open Profile"}</span>
+                                                        </div>
+                                                        <span className="disc-post__unlock">Join / View</span>
+                                                    </div>
+                                                </div>
+                                            </article>
+                                        </Link>
+                                    );
+                                })()}
+                            </div>
+                        )}
+
+                        {filteredCreators.length > 1 && (
+                            <div className="disc-grid">
+                                {filteredCreators.slice(1).map((creator) => {
+                                    const creatorName = creator.displayName ?? creator.handle;
+                                    const description = creator.bio?.trim() || "Private wallet-gated creator page.";
+                                    const isPaidMembership = creator.subscriptionPriceMicrocredits !== null && Number(creator.subscriptionPriceMicrocredits) > 0;
+
+                                    return (
+                                        <Link key={creator.id} href={`/creator/${creator.handle}`} className="disc-card-link">
+                                            <div className="disc-card">
+                                                {creator.category ? <span className="disc-card__tag">{creator.category}</span> : null}
+                                                <div className="disc-card__avatar">{getInitials(creator)}</div>
+                                                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                                                    <h3 className="disc-card__name">{creatorName}</h3>
+                                                    {creator.isVerified ? <span className="disc-post__verified" style={{ fontSize: "0.55rem", padding: "2px 4px" }}>✔</span> : null}
+                                                </div>
+                                                <p className="disc-card__handle">@{creator.handle}</p>
+                                                <p className="disc-card__bio">
+                                                    {description.length > 100 ? `${description.slice(0, 100)}...` : description}
+                                                </p>
+                                                <div className="disc-card__divider" />
+                                                <div className="disc-card__footer">
+                                                    <span className="disc-card__price">{isPaidMembership ? formatSubscriptionPrice(creator.subscriptionPriceMicrocredits).split("/")[0] + "/ mo" : "Free"}</span>
+                                                    <span className="disc-card__view">View Panel</span>
                                                 </div>
                                             </div>
-
-                                            <p className="disc-post__description">
-                                                {description.length > 220 ? `${description.slice(0, 220)}...` : description}
-                                            </p>
-
-                                            <div className="disc-post__footer">
-                                                <div className="disc-post__tags">
-                                                    <span className="disc-post__tag">{followerLabel}</span>
-                                                    <span className="disc-post__tag">
-                                                        {isPaidMembership ? "Subscription access" : "Open profile"}
-                                                    </span>
-                                                    <span className="disc-post__tag">Private wallet-gated page</span>
-                                                </div>
-                                                <span className="disc-post__unlock">Open creator feed</span>
-                                            </div>
-                                        </div>
-                                    </article>
-                                </Link>
-                            );
-                        })}
-                        </div>
+                                        </Link>
+                                    );
+                                })}
+                            </div>
+                        )}
                     </section>
                 )}
 
