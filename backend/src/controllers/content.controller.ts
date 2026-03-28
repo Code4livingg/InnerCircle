@@ -5,7 +5,9 @@ import { prisma } from "../db/prisma.js";
 import { sha256Hex } from "../utils/crypto.js";
 import { deleteMedia, uploadMedia } from "../services/mediaStorageService.js";
 import { randomFieldLiteral } from "../utils/aleo.js";
+import type { AnonOrWalletRequest } from "../middleware/requireAnonOrWallet.js";
 import type { WalletSessionRequest } from "../middleware/requireWalletSession.js";
+import { getSubscriptionActiveUntil, tierFromPriceMicrocredits } from "../services/subscriptionService.js";
 import { ensureWalletRoleByHash } from "../services/walletRoleService.js";
 
 const accessTypeSchema = z
@@ -35,6 +37,7 @@ const updateSchema = z.object({
 });
 
 const walletHash = (address: string): string => sha256Hex(address.toLowerCase());
+const normalizeFieldId = (value: string): string => value.trim().replace(/field$/i, "");
 
 const missingOptionalContentColumns = new Set([
   "Content.encryptedData",
@@ -203,7 +206,7 @@ export const uploadContent = async (req: WalletSessionRequest, res: Response): P
   }
 };
 
-export const getContent = async (req: Request, res: Response): Promise<void> => {
+export const getContent = async (req: AnonOrWalletRequest, res: Response): Promise<void> => {
   try {
     const { contentId } = req.params;
     const minimalSelect = {
@@ -227,6 +230,7 @@ export const getContent = async (req: Request, res: Response): Promise<void> => 
           displayName: true,
           creatorFieldId: true,
           walletAddress: true,
+          walletHash: true,
           subscriptionPriceMicrocredits: true,
           isVerified: true,
         },
@@ -279,7 +283,77 @@ export const getContent = async (req: Request, res: Response): Promise<void> => 
       return;
     }
 
-    res.json({ content });
+    if (content.accessType === "SUBSCRIPTION") {
+      if (req.isAnonymous) {
+        const anonSession = req.anonSession;
+        if (!anonSession) {
+          res.status(401).json({ error: "Missing anonymous session" });
+          return;
+        }
+
+        if (normalizeFieldId(anonSession.circleId) !== normalizeFieldId(content.creator.creatorFieldId)) {
+          res.status(403).json({ error: "Anonymous session does not unlock this creator circle." });
+          return;
+        }
+
+        const requiredTier = tierFromPriceMicrocredits(content.subscriptionTier?.priceMicrocredits ?? null);
+        if (anonSession.tier < requiredTier) {
+          res.status(403).json({ error: "Subscription tier upgrade required to access this content." });
+          return;
+        }
+      } else {
+        const walletSession = req.walletSession;
+        if (!walletSession) {
+          res.status(401).json({ error: "Missing wallet session token" });
+          return;
+        }
+
+        if (content.creator.walletHash !== walletSession.wh) {
+          const latestPurchase = await prisma.subscriptionPurchase.findFirst({
+            where: {
+              creatorId: content.creatorId,
+              walletHash: walletSession.wh,
+            },
+            orderBy: { verifiedAt: "desc" },
+            select: {
+              verifiedAt: true,
+              expiresAt: true,
+              priceMicrocredits: true,
+            },
+          });
+
+          if (!latestPurchase) {
+            res.status(403).json({ error: "No active subscription for this creator." });
+            return;
+          }
+
+          const activeUntil = getSubscriptionActiveUntil(latestPurchase.verifiedAt, latestPurchase.expiresAt ?? null);
+          if (activeUntil.getTime() <= Date.now()) {
+            res.status(403).json({ error: "Subscription expired. Please renew to continue." });
+            return;
+          }
+
+          if (
+            content.subscriptionTier?.priceMicrocredits &&
+            latestPurchase.priceMicrocredits < content.subscriptionTier.priceMicrocredits
+          ) {
+            res.status(403).json({ error: "Subscription tier upgrade required to access this content." });
+            return;
+          }
+        }
+      }
+    }
+
+    const { walletHash: _walletHash, ...creatorWithoutWalletHash } = content.creator;
+    res.json({
+      content: {
+        ...content,
+        creator: {
+          ...creatorWithoutWalletHash,
+          walletAddress: req.isAnonymous ? null : creatorWithoutWalletHash.walletAddress,
+        },
+      },
+    });
   } catch (error) {
     res.status(400).json({ error: (error as Error).message });
   }

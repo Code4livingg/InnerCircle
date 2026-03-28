@@ -132,13 +132,14 @@ export const getMediaAccessUrl = async (req: SessionRequest, res: Response): Pro
     const url = await generateMediaUrl(content.baseObjectKey);
     const ttlSeconds = signedUrlTtlSeconds();
     const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
-    const watermarkId = createWatermarkId(session.wh, content.id, "signed-url");
+    const streamSubject = session.aid ? `anon:${session.aid}` : session.wh;
+    const watermarkId = createWatermarkId(streamSubject, content.id, "signed-url");
 
     await prisma.streamEvent.create({
       data: {
         // New access sessions persist the unlinkable session subject here so
         // watermark tracing does not point back to a stable wallet hash.
-        walletHash: session.wh,
+        walletHash: streamSubject,
         contentId: content.id,
         sessionId: session.sid,
         watermarkId,

@@ -8,6 +8,7 @@ export interface CreateSessionInput {
   // `identitySeed` is the already-verified wallet identity input. We derive an
   // unlinkable per-session subject from it instead of reusing the stable hash.
   identitySeed: string;
+  anonymousSessionId?: string;
   scope: AccessScope;
 }
 
@@ -22,7 +23,7 @@ export const createSessionSubject = (identitySeed: string, sessionId: string): s
   return sha256Hex(`${identitySeed}:${sessionId}:${salt}:${env.sessionSecret}`);
 };
 
-export const createSessionToken = ({ identitySeed, scope }: CreateSessionInput): SessionTokenResult => {
+export const createSessionToken = ({ identitySeed, anonymousSessionId, scope }: CreateSessionInput): SessionTokenResult => {
   const sessionId = randomUUID();
   const expiresAt = Math.floor(Date.now() / 1000) + env.sessionTtlSeconds;
   const sessionSubject = createSessionSubject(identitySeed, sessionId);
@@ -34,6 +35,7 @@ export const createSessionToken = ({ identitySeed, scope }: CreateSessionInput):
       // new access sessions carry the unlinkable session subject here.
       wh: sessionSubject,
       ssh: sessionSubject,
+      ...(anonymousSessionId ? { aid: anonymousSessionId } : {}),
       scope,
       exp: expiresAt,
     },

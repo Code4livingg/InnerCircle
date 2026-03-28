@@ -18,12 +18,23 @@ import {
   verifyMembershipProof,
   verifyPaymentProof,
 } from "../services/proofStoreService.js";
+import {
+  AnonymousSessionExpiredError,
+  AnonymousSessionNotFoundError,
+  normalizeAnonymousSessionId,
+  resolveActiveAnonSession,
+  type ActiveAnonSession,
+} from "../services/anonymousSessionService.js";
 import { ensureWalletRoleByHash, toClientRole, WalletRoleConflictError } from "../services/walletRoleService.js";
 import { DB_UNAVAILABLE_CODE, DB_UNAVAILABLE_MESSAGE, isDatabaseUnavailableError } from "../utils/dbErrors.js";
 import { walletHashForAddress } from "../services/walletRoleService.js";
-import { getSubscriptionActiveUntil, tierFromPriceMicrocredits } from "../services/subscriptionService.js";
+import {
+  approximateExpiryDateFromBlockHeights,
+  getSubscriptionActiveUntil,
+  tierFromPriceMicrocredits,
+} from "../services/subscriptionService.js";
 import { ensureNotSelfDestructed, incrementViewsAndMaybeDelete } from "../services/selfDestructService.js";
-import type { WalletSessionRequest } from "../middleware/requireWalletSession.js";
+import type { AnonOrWalletRequest } from "../middleware/requireAnonOrWallet.js";
 
 const proofSchema = z.union([
   z.string().min(10),
@@ -89,6 +100,10 @@ const sessionSchema = z.discriminatedUnion("mode", [
     executionProof: zkProofSchema,
   }),
   // Direct purchase-tx modes — no separate prove_ call needed
+  z.object({
+    mode: z.literal("subscription-anon"),
+    creatorHandle: z.string().min(3),
+  }),
   z.object({
     mode: z.literal("subscription-direct"),
     creatorHandle: z.string().min(3),
@@ -156,14 +171,64 @@ const canAccessContentWithSession = (
 const normalizeFieldId = (value: string): string => value.trim().replace(/field$/i, "");
 const toStoredFieldLiteral = (value: string): string => `${normalizeFieldId(value)}field`;
 
-export const createAccessSession = async (req: WalletSessionRequest, res: Response): Promise<void> => {
+const issueAnonymousSubscriptionSession = (
+  anonSession: ActiveAnonSession,
+  creatorHandle: string,
+  currentBlock: number,
+  verifiedBy: "payment" | "zk-proof",
+) =>
+  createSessionToken({
+    identitySeed: `anon:${anonSession.sessionId}`,
+    anonymousSessionId: anonSession.sessionId,
+    scope: {
+      type: "subscription",
+      creatorId: creatorHandle,
+      verifiedBy,
+      tier: anonSession.tier,
+      expiresAt: approximateExpiryDateFromBlockHeights(currentBlock, anonSession.expiresAtBlock).getTime(),
+      entitlementBound: true,
+    },
+  });
+
+export const createAccessSession = async (req: AnonOrWalletRequest, res: Response): Promise<void> => {
   try {
     const payload = sessionSchema.parse(req.body);
 
+    if (payload.mode === "subscription-anon") {
+      const anonSessionId = normalizeAnonymousSessionId(req.header("X-Anonymous-Session"));
+      if (!anonSessionId) {
+        res.status(401).json({ error: "Missing anonymous session" });
+        return;
+      }
+
+      const { session: anonSession, currentBlock } = await resolveActiveAnonSession(anonSessionId);
+      const creator = await prisma.creator.findUnique({
+        where: { handle: payload.creatorHandle.toLowerCase() },
+        select: { handle: true, creatorFieldId: true },
+      });
+      if (!creator) {
+        res.status(404).json({ error: "Creator not found" });
+        return;
+      }
+
+      if (normalizeFieldId(anonSession.circleId) !== normalizeFieldId(creator.creatorFieldId)) {
+        res.status(403).json({ error: "Anonymous session does not match this creator circle." });
+        return;
+      }
+
+      const session = issueAnonymousSubscriptionSession(anonSession, creator.handle, currentBlock, "payment");
+      res.json({ sessionToken: session.token, sessionId: session.sessionId, expiresAt: session.expiresAt });
+      return;
+    }
+
     if (payload.mode === "subscription-zk") {
       const walletSession = req.walletSession;
-      if (!walletSession) {
-        res.status(401).json({ error: "Missing wallet session token" });
+      const anonSessionId = normalizeAnonymousSessionId(req.header("X-Anonymous-Session"));
+      const anonResolution = !walletSession && anonSessionId
+        ? await resolveActiveAnonSession(anonSessionId)
+        : null;
+      if (!walletSession && !anonResolution) {
+        res.status(401).json({ error: "Missing wallet session token or anonymous session" });
         return;
       }
 
@@ -196,6 +261,37 @@ export const createAccessSession = async (req: WalletSessionRequest, res: Respon
       });
       if (!creator) {
         res.status(404).json({ error: "Creator not found" });
+        return;
+      }
+
+      if (anonResolution) {
+        if (normalizeFieldId(anonResolution.session.circleId) !== verified.circleId) {
+          res.status(403).json({ error: "Anonymous session does not match the verified creator circle." });
+          return;
+        }
+
+        if (anonResolution.session.tier < verified.tier) {
+          res.status(403).json({ error: "Anonymous session tier is too low for this proof." });
+          return;
+        }
+
+        if (anonResolution.session.expiresAtBlock !== verified.expiresAtBlock) {
+          res.status(403).json({ error: "Anonymous session expiry does not match the verified proof." });
+          return;
+        }
+
+        const session = issueAnonymousSubscriptionSession(
+          anonResolution.session,
+          creator.handle,
+          Math.max(anonResolution.currentBlock, verified.currentBlock),
+          "zk-proof",
+        );
+        res.json({ sessionToken: session.token, sessionId: session.sessionId, expiresAt: session.expiresAt });
+        return;
+      }
+
+      if (!walletSession) {
+        res.status(401).json({ error: "Missing wallet session token" });
         return;
       }
 
@@ -601,6 +697,21 @@ export const createAccessSession = async (req: WalletSessionRequest, res: Respon
 
     res.json({ sessionToken: session.token, sessionId: session.sessionId, expiresAt: session.expiresAt });
   } catch (error) {
+    if (error instanceof AnonymousSessionNotFoundError) {
+      res.status(401).json({ error: "Anonymous session not found" });
+      return;
+    }
+
+    if (error instanceof AnonymousSessionExpiredError) {
+      res.status(401).json({ error: "Anonymous session expired" });
+      return;
+    }
+
+    if (error instanceof ExplorerRequestError && /block height/i.test(error.message)) {
+      res.status(502).json({ error: "Failed to verify Aleo block height" });
+      return;
+    }
+
     if (isPendingTxError(error)) {
       res.status(409).json({ error: (error as Error).message, code: "TX_PENDING" });
       return;
@@ -634,7 +745,7 @@ export const startFingerprintSession = async (req: Request, res: Response): Prom
   try {
     const payload = startFingerprintSessionSchema.parse(req.body);
     const session = validateSessionToken(payload.sessionToken);
-    const sessionSubject = session.ssh ?? session.wh;
+    const sessionSubject = session.aid ? `anon:${session.aid}` : (session.ssh ?? session.wh);
 
     const content = await prisma.content.findUnique({
       where: { id: payload.contentId },

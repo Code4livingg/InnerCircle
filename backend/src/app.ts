@@ -56,7 +56,7 @@ export const createApp = () => {
 
   const logger = pino({
     level: env.nodeEnv === "development" ? "debug" : "info",
-    redact: ["req.headers.authorization"],
+    redact: ["req.headers.authorization", "req.headers.x-anonymous-session"],
   });
 
   app.use(

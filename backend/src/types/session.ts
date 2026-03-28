@@ -17,6 +17,7 @@ export interface SessionClaims {
   // New sessions use an unlinkable per-session subject, while older sessions
   // still use the historical wallet hash in `wh`.
   ssh?: string;
+  aid?: string;
   scope: AccessScope;
   iat: number;
   exp: number;

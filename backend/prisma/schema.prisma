@@ -177,6 +177,18 @@ model SubscriptionNullifier {
   @@map("subscription_nullifiers")
 }
 
+model AnonSession {
+  id             String   @id @default(cuid())
+  sessionId      String   @unique
+  circleId       String
+  tier           Int
+  expiresAtBlock Int
+  nullifierHash  String   @unique
+  createdAt      DateTime @default(now())
+
+  @@map("anon_sessions")
+}
+
 model CreatorMessagingKey {
   id         String   @id @default(uuid()) @db.Uuid
   creatorId  String   @unique @db.Uuid

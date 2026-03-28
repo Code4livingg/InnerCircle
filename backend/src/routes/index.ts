@@ -3,6 +3,7 @@ import { prisma } from "../db/prisma.js";
 import { accessRouter } from "./access.routes.js";
 import { adminRouter } from "./admin.routes.js";
 import { aleoRouter } from "./aleo.routes.js";
+import { anonRouter } from "./anon.routes.js";
 import { ageRouter } from "./age.routes.js";
 import { contentRouter } from "./content.routes.js";
 import { creatorsRouter } from "./creators.routes.js";
@@ -52,6 +53,7 @@ apiRouter.get("/health", async (_req, res) => {
 
 apiRouter.use("/access", accessRouter);
 apiRouter.use("/aleo", aleoRouter);
+apiRouter.use("/anon", anonRouter);
 apiRouter.get("/creator/analytics", getCreatorAnalytics);
 apiRouter.use("/creators", creatorsRouter);
 apiRouter.use("/content", contentRouter);
