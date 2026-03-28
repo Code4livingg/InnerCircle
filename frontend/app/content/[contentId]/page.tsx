@@ -128,15 +128,40 @@ export default function ContentPage({ params }: ContentPageProps) {
   const [subscriptionTierPrice, setSubscriptionTierPrice] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchContentById(contentId)
-      .then((data) => {
-        setContent(data.content);
-        setLoadError(null);
-      })
-      .catch((error) => {
-        setLoadError((error as Error).message || "Failed to load content.");
-      });
-  }, [contentId]);
+    let cancelled = false;
+
+    const loadContent = async (): Promise<void> => {
+      try {
+        if (!anonEnabled) {
+          if (!connected || !address) {
+            if (!cancelled) {
+              setContent(null);
+              setLoadError("Connect your Aleo wallet or enable Anonymous Mode to access this content.");
+            }
+            return;
+          }
+
+          await getWalletSessionToken(wallet);
+        }
+
+        const data = await fetchContentById(contentId);
+        if (!cancelled) {
+          setContent(data.content);
+          setLoadError(null);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setLoadError((error as Error).message || "Failed to load content.");
+        }
+      }
+    };
+
+    void loadContent();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [address, anonEnabled, connected, contentId, wallet]);
 
   useEffect(() => {
     let cancelled = false;
@@ -205,13 +230,13 @@ export default function ContentPage({ params }: ContentPageProps) {
   const requiresTierUpgrade =
     !!requiredTier && !isPpvContent && requiredTierPrice > 0 && currentTierPrice > 0 && currentTierPrice < requiredTierPrice;
   const hasPaymentProof = Boolean(paymentProof);
-  const canAttemptSubscriptionUnlock = hasActiveSubscription || hasLocalSubscriptionReceipt;
+  const canAttemptSubscriptionUnlock = anonEnabled ? Boolean(anonSessionId) : (hasActiveSubscription || hasLocalSubscriptionReceipt);
 
   useEffect(() => {
     let cancelled = false;
 
     const run = async (): Promise<void> => {
-      if (!content || isPpvContent || !connected || !isAleoAddress(address)) {
+      if (anonEnabled || !content || isPpvContent || !connected || !isAleoAddress(address)) {
         if (!cancelled) {
           setHasActiveSubscription(false);
           setSubscriptionTierPrice(null);
@@ -263,7 +288,7 @@ export default function ContentPage({ params }: ContentPageProps) {
     return () => {
       cancelled = true;
     };
-  }, [address, connected, content, isPpvContent]);
+  }, [address, anonEnabled, connected, content, isPpvContent]);
 
   const streamSrc = useMemo(() => mediaAccess?.url ?? null, [mediaAccess]);
   const countdownSeconds = useCountdownSeconds(content?.expiresAt ?? null);
@@ -317,17 +342,13 @@ export default function ContentPage({ params }: ContentPageProps) {
     };
   }, [content, contentId, sessionToken]);
 
-  const activateTraceSession = async (nextSessionToken: string, identityToken: string): Promise<void> => {
-    if (!identityToken) {
-      throw new Error("Missing session identity token.");
-    }
-
+  const activateTraceSession = async (nextSessionToken: string, identityToken?: string): Promise<void> => {
     setTraceSession(null);
 
     const trace = await startSession({
       contentId,
-      walletAddress: identityToken,
       sessionToken: nextSessionToken,
+      ...(identityToken ? { walletAddress: identityToken } : {}),
     });
 
     setTraceSession(trace);
@@ -440,6 +461,22 @@ export default function ContentPage({ params }: ContentPageProps) {
 
       if (!canAttemptSubscriptionUnlock) {
         throw new Error("No active subscription payment found for this creator. Subscribe first.");
+      }
+
+      if (anonEnabled) {
+        setProofProgressLabel("Opening anonymous access session...");
+        const session = await runWithPendingRetry(() =>
+          createSession({
+            mode: "subscription-anon",
+            creatorHandle: content.creator.handle,
+          }),
+        );
+        await activateTraceSession(session.sessionToken);
+        setSessionToken(session.sessionToken);
+        setProofSuccessLabel("✔ Anonymous Session Active");
+        setProofProgressLabel("Preparing encrypted stream...");
+        setProofState("success");
+        return;
       }
 
       await ensureWalletConnected();

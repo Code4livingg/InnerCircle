@@ -5,6 +5,7 @@ import { use, useEffect, useMemo, useState, useRef } from "react";
 import { useWallet } from "@/lib/walletContext";
 import { Network } from "@provablehq/aleo-types";
 import { anonLabelFromSeed } from "@/features/anonymous/identity";
+import { registerSubscriptionAnonSession } from "@/features/anonymous/registerAnonSession";
 import { readAnonymousMode } from "@/features/anonymous/storage";
 import { readStoredCreatorPaymentPreferences } from "@/lib/creatorPaymentPreferences";
 import {
@@ -45,6 +46,7 @@ import {
 import {
   executeCreditsTransfer,
   executeAnonymousTip,
+  fetchLatestBlockHeight,
   type FeePreference,
   waitForOnChainTransactionId,
 } from "../../../lib/aleoTransactions";
@@ -159,6 +161,13 @@ const formatTierCredits = (microcredits: string | null): string => {
     return "Free access";
   }
   return `${(value / 1_000_000).toFixed(2)} credits / month`;
+};
+
+const estimateIsoFromExpiryBlock = async (expiresAtBlock: number): Promise<string> => {
+  const currentBlock = Number(await fetchLatestBlockHeight());
+  const remainingBlocks = Math.max(expiresAtBlock - currentBlock, 0);
+  const approxBlockDurationMs = Math.floor((30 * 24 * 60 * 60 * 1000) / 15_000);
+  return new Date(Date.now() + remainingBlocks * approxBlockDurationMs).toISOString();
 };
 
 const isAleoAddress = (value: string | null | undefined): value is string =>
@@ -287,6 +296,7 @@ export default function CreatorPage({ params }: CreatorPageProps) {
   const [subscribeProgressLabel, setSubscribeProgressLabel] = useState<string | null>(null);
   const [subscriptionProgressStep, setSubscriptionProgressStep] = useState<SubscriptionProgressStep>(0);
   const [subscribeRoute, setSubscribeRoute] = useState<SubscriptionPaymentRoute | null>(null);
+  const [anonRegistrationNotice, setAnonRegistrationNotice] = useState<string | null>(null);
   const [hasSubscription, setHasSubscription] = useState(false);
   const [subscriptionActiveUntil, setSubscriptionActiveUntil] = useState<string | null>(null);
   const [subscriptionTierName, setSubscriptionTierName] = useState<string | null>(null);
@@ -614,6 +624,7 @@ export default function CreatorPage({ params }: CreatorPageProps) {
     setMembershipProofLabel(null);
     setSubscribeProgressLabel(null);
     setSubscribeRoute(null);
+    setAnonRegistrationNotice(null);
     setSubscriptionProgressStep(1);
     processingRef.current = true;
     cancelledByAccountChangeRef.current = false;
@@ -625,6 +636,7 @@ export default function CreatorPage({ params }: CreatorPageProps) {
       setSubscribeState("wallet");
       const selectedPrice = selectedTier?.priceMicrocredits ?? creator.subscriptionPriceMicrocredits ?? "0";
       const subscriptionPrice = BigInt(selectedPrice);
+      const anonymousModeEnabled = readAnonymousMode();
       if (subscriptionPrice <= 0n) {
         setHasSubscription(true);
         setSubscribeState("success");
@@ -651,6 +663,8 @@ export default function CreatorPage({ params }: CreatorPageProps) {
         proof: SubscriptionExecutionProof | null,
         nullifier: string,
         signer: string,
+        tier: number,
+        expiresAtBlock: number,
       ): Promise<{ expiresAt: string; tierId: string | null; tierName: string | null; priceMicrocredits: string }> => {
         const attemptSync = async (): Promise<{
           expiresAt: string;
@@ -658,6 +672,15 @@ export default function CreatorPage({ params }: CreatorPageProps) {
           tierName: string | null;
           priceMicrocredits: string;
         }> => {
+          if (anonymousModeEnabled) {
+            return {
+              expiresAt: await estimateIsoFromExpiryBlock(expiresAtBlock),
+              tierId: selectedTier?.id ?? null,
+              tierName: selectedTier?.tierName ?? null,
+              priceMicrocredits: selectedTier?.priceMicrocredits ?? creator.subscriptionPriceMicrocredits ?? "0",
+            };
+          }
+
           const walletToken = await getWalletSessionToken(wallet);
           if (proof) {
             const synced = await createSubscription(
@@ -710,6 +733,8 @@ export default function CreatorPage({ params }: CreatorPageProps) {
         route: SubscriptionPaymentRoute;
         proof: SubscriptionExecutionProof | null;
         nullifier: string;
+        tier: number;
+        expiresAtBlock: number;
       }> => {
         await ensureSignerUnchanged();
         setSubscriptionProgressStep(2);
@@ -781,6 +806,8 @@ export default function CreatorPage({ params }: CreatorPageProps) {
           route,
           proof,
           nullifier: invoice.nullifier,
+          tier: invoice.tier,
+          expiresAtBlock: invoice.expiresAt,
         };
       };
 
@@ -791,6 +818,8 @@ export default function CreatorPage({ params }: CreatorPageProps) {
         route: SubscriptionPaymentRoute;
         proof: SubscriptionExecutionProof | null;
         nullifier: string;
+        tier: number;
+        expiresAtBlock: number;
       };
 
       try {
@@ -822,6 +851,8 @@ export default function CreatorPage({ params }: CreatorPageProps) {
         result.proof,
         result.nullifier,
         signerAddress,
+        result.tier,
+        result.expiresAtBlock,
       );
       setSubscribeTxId(result.paymentTxId);
       setHasSubscription(true);
@@ -836,13 +867,32 @@ export default function CreatorPage({ params }: CreatorPageProps) {
           : "✔ Subscription Active! Public balance route confirmed on-chain.",
       );
       setSubscribeState("success");
-      persistSubscriptionStatus(creator.handle, signerAddress, {
-        active: true,
-        activeUntil: syncedSubscription.expiresAt,
-        tierName: syncedSubscription.tierName ?? selectedTier?.tierName ?? null,
-        tierId: syncedSubscription.tierId ?? selectedTier?.id ?? null,
-        tierPriceMicrocredits: syncedSubscription.priceMicrocredits ?? selectedTier?.priceMicrocredits ?? creator.subscriptionPriceMicrocredits ?? null,
-      });
+      if (!anonymousModeEnabled) {
+        persistSubscriptionStatus(creator.handle, signerAddress, {
+          active: true,
+          activeUntil: syncedSubscription.expiresAt,
+          tierName: syncedSubscription.tierName ?? selectedTier?.tierName ?? null,
+          tierId: syncedSubscription.tierId ?? selectedTier?.id ?? null,
+          tierPriceMicrocredits: syncedSubscription.priceMicrocredits ?? selectedTier?.priceMicrocredits ?? creator.subscriptionPriceMicrocredits ?? null,
+        });
+      }
+      if (anonymousModeEnabled) {
+        void registerSubscriptionAnonSession({
+          circleId: creator.creatorFieldId,
+          tier: result.tier,
+          expiresAtBlock: result.expiresAtBlock,
+          subscriberSeed: signerAddress,
+        })
+          .then(() => {
+            setAnonRegistrationNotice("Anonymous browsing enabled for this subscription.");
+          })
+          .catch((error) => {
+            console.warn("[InnerCircle] Failed to register anonymous subscription session", {
+              creatorHandle: creator.handle,
+              error,
+            });
+          });
+      }
     } catch (err) {
       const rawMessage = (err as Error).message || "Subscription transaction failed.";
       if (/already exists in the ledger/i.test(rawMessage)) {
@@ -1386,6 +1436,12 @@ export default function CreatorPage({ params }: CreatorPageProps) {
                 {subscribeState === "success" ? (
                   <p className="t-sm t-success" style={{ marginTop: "var(--s2)" }}>
                     {membershipProofLabel ?? "✔ Subscription Verified Privately"}
+                  </p>
+                ) : null}
+
+                {anonRegistrationNotice ? (
+                  <p className="t-xs t-success" style={{ marginTop: "var(--s1)", opacity: 0.9 }}>
+                    {anonRegistrationNotice}
                   </p>
                 ) : null}
 
