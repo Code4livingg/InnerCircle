@@ -137,6 +137,9 @@ export default function LiveStreamPage({ params }: LiveStreamPageProps) {
         attempts: 60,
         delayMs: 2000,
       });
+      if (!chainTxId) {
+        throw new Error("Live PPV purchase was submitted, but the finalized on-chain tx id is not available yet.");
+      }
 
       setPurchaseTxId(chainTxId);
 

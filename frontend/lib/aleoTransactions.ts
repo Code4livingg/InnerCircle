@@ -5,7 +5,9 @@ import { fetchPublicBalance } from "./api";
 const MICROCREDITS_PER_ALEO = 1_000_000n;
 const DEFAULT_EXECUTION_FEE_ALEO = 0.25;
 const ALEO_EXPLORER_API =
-  process.env.NEXT_PUBLIC_ALEO_EXPLORER_API?.trim() || "https://api.explorer.provable.com/v1";
+  process.env.NEXT_PUBLIC_ALEO_API?.trim() ||
+  process.env.NEXT_PUBLIC_ALEO_EXPLORER_API?.trim() ||
+  "https://api.explorer.provable.com/v1";
 const ALEO_EXPLORER_NETWORK = "testnet";
 const TIP_PROGRAM_ID = process.env.NEXT_PUBLIC_TIP_PROGRAM_ID?.trim() || "tip_pay_v5_xwnxp.aleo";
 const PAYMENT_PROOF_PROGRAM_ID =
@@ -64,6 +66,14 @@ interface RequestExecutionLike {
 
 interface ExecutionReaderLike {
   getExecution?: (transactionId: string) => Promise<unknown>;
+}
+
+interface RequestStatusReaderLike {
+  getRequestStatus?: (requestId: string) => Promise<unknown>;
+}
+
+interface TransactionReaderLike {
+  getTransaction?: (transactionId: string) => Promise<unknown>;
 }
 
 interface TransactionHistoryLike {
@@ -1055,6 +1065,58 @@ const getExecutionReaders = (wallet: WalletContextState): ExecutionReaderLike[] 
   return out;
 };
 
+const getRequestStatusReaders = (wallet: WalletContextState): RequestStatusReaderLike[] => {
+  const out: RequestStatusReaderLike[] = [];
+  const seen = new Set<object>();
+
+  const add = (candidate: unknown): void => {
+    if (!candidate || typeof candidate !== "object") return;
+    const casted = candidate as RequestStatusReaderLike;
+    if (typeof casted.getRequestStatus !== "function") {
+      return;
+    }
+    const ref = candidate as object;
+    if (seen.has(ref)) return;
+    seen.add(ref);
+    out.push(casted);
+  };
+
+  add(wallet as unknown as RequestStatusReaderLike);
+  add(wallet.wallet?.adapter as unknown as RequestStatusReaderLike);
+
+  for (const raw of getRawExecutionWallets(wallet)) {
+    add(raw as unknown as RequestStatusReaderLike);
+  }
+
+  return out;
+};
+
+const getTransactionReaders = (wallet: WalletContextState): TransactionReaderLike[] => {
+  const out: TransactionReaderLike[] = [];
+  const seen = new Set<object>();
+
+  const add = (candidate: unknown): void => {
+    if (!candidate || typeof candidate !== "object") return;
+    const casted = candidate as TransactionReaderLike;
+    if (typeof casted.getTransaction !== "function") {
+      return;
+    }
+    const ref = candidate as object;
+    if (seen.has(ref)) return;
+    seen.add(ref);
+    out.push(casted);
+  };
+
+  add(wallet as unknown as TransactionReaderLike);
+  add(wallet.wallet?.adapter as unknown as TransactionReaderLike);
+
+  for (const raw of getRawExecutionWallets(wallet)) {
+    add(raw as unknown as TransactionReaderLike);
+  }
+
+  return out;
+};
+
 const normalizeExecutionTranscript = (value: unknown): string | undefined => {
   if (typeof value === "string" && value.trim().length > 0) {
     return value.trim();
@@ -1082,6 +1144,16 @@ const normalizeExecutionTranscript = (value: unknown): string | undefined => {
         return candidate.trim();
       }
     }
+  }
+
+  const transitionProof =
+    (record.execution as { transitions?: Array<{ proof?: unknown }> } | undefined)?.transitions?.[0]?.proof ??
+    (record.transaction as { execution?: { transitions?: Array<{ proof?: unknown }> } } | undefined)
+      ?.execution?.transitions?.[0]?.proof ??
+    record.transcript;
+
+  if (typeof transitionProof === "string" && transitionProof.trim().length > 0) {
+    return transitionProof.trim();
   }
 
   return undefined;
@@ -1126,6 +1198,35 @@ export const getExecutionFromWallet = async (
     : new Error("Wallet did not expose the execution transcript for the subscription proof transaction.");
 };
 
+const getTransactionFromWallet = async (
+  wallet: WalletContextState,
+  transactionIds: string[],
+): Promise<string | null> => {
+  const readers = getTransactionReaders(wallet);
+  if (readers.length === 0) {
+    return null;
+  }
+
+  for (const transactionId of transactionIds) {
+    if (!transactionId) continue;
+    for (const reader of readers) {
+      if (typeof reader.getTransaction !== "function") continue;
+      try {
+        const transcript = normalizeExecutionTranscript(await reader.getTransaction(transactionId));
+        if (transcript) {
+          return transcript;
+        }
+      } catch (error) {
+        if (process.env.NODE_ENV !== "production") {
+          console.log("[InnerCircle] Wallet transaction fetch did not yield a transcript yet", error);
+        }
+      }
+    }
+  }
+
+  return null;
+};
+
 export const waitForTransactionFinality = async (
   txId: string,
   timeoutMs = 90_000,
@@ -1160,53 +1261,58 @@ export const waitForTransactionFinality = async (
 
 export const waitForExecutionTranscript = async (
   wallet: WalletContextState,
-  txId: string,
-  timeoutMs = 90_000,
-  intervalMs = 5_000,
+  txIdOrRequestId: string,
+  options?: {
+    fallbackRequestId?: string;
+    maxAttempts?: number;
+    intervalMs?: number;
+  },
 ): Promise<string | null> => {
-  const explorerUrl = `${ALEO_EXPLORER_API}/${ALEO_EXPLORER_NETWORK}/transaction/${txId}`;
-  const deadline = Date.now() + timeoutMs;
-  let walletTranscriptUnsupported = false;
+  const maxAttempts = options?.maxAttempts ?? 30;
+  const intervalMs = options?.intervalMs ?? 4_000;
+  const fallbackRequestId = options?.fallbackRequestId;
+  const walletIds = Array.from(new Set([txIdOrRequestId, fallbackRequestId].filter((value): value is string => Boolean(value))));
 
-  while (Date.now() < deadline) {
-    if (!walletTranscriptUnsupported) {
+  for (let i = 0; i < maxAttempts; i += 1) {
+    if (isOnChainAleoTxId(txIdOrRequestId)) {
       try {
-        const transcript = await getExecutionFromWallet(wallet, [txId]);
-        if (transcript) {
-          console.log("[InnerCircle] Got execution transcript from wallet");
-          return transcript;
+        const response = await fetch(`${ALEO_EXPLORER_API}/${ALEO_EXPLORER_NETWORK}/transaction/${txIdOrRequestId}`);
+        if (response.ok) {
+          const execution = normalizeExecutionTranscript(await response.json());
+          if (execution) {
+            console.log("[InnerCircle] Got execution transcript from explorer");
+            return execution;
+          }
         }
       } catch (error) {
-        if (isExecutionTranscriptUnsupportedError(error)) {
-          walletTranscriptUnsupported = true;
-          console.warn("[InnerCircle] Wallet transcript API is unsupported for this transaction. Falling back to tx verification.");
-        } else if (process.env.NODE_ENV !== "production") {
-          console.log("[InnerCircle] Transcript not ready, retrying...", error);
+        if (process.env.NODE_ENV !== "production") {
+          console.log("[InnerCircle] Transcript not ready from explorer, retrying...", error);
         }
       }
     }
 
     try {
-      const response = await fetch(explorerUrl);
-      if (response.ok) {
-        const data = await response.json();
-        const execution =
-          (typeof data?.execution === "string" ? data.execution : null) ??
-          (typeof data?.transaction?.execution === "string" ? data.transaction.execution : null) ??
-          null;
-        if (execution) {
-          console.log("[InnerCircle] Got execution transcript from explorer");
-          return execution;
-        }
+      const transcript = await getExecutionFromWallet(wallet, walletIds);
+      if (transcript) {
+        console.log("[InnerCircle] Got execution transcript from wallet");
+        return transcript;
       }
     } catch (error) {
-      if (process.env.NODE_ENV !== "production") {
-        console.log("[InnerCircle] Transcript not ready, retrying...", error);
+      if (!isExecutionTranscriptUnsupportedError(error) && process.env.NODE_ENV !== "production") {
+        console.log("[InnerCircle] Wallet getExecution did not yield a transcript yet", error);
       }
     }
 
-    if (walletTranscriptUnsupported) {
-      return null;
+    try {
+      const transcript = await getTransactionFromWallet(wallet, walletIds);
+      if (transcript) {
+        console.log("[InnerCircle] Got execution transcript from wallet transaction payload");
+        return transcript;
+      }
+    } catch (error) {
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[InnerCircle] Wallet getTransaction did not yield a transcript yet", error);
+      }
     }
 
     await wait(intervalMs);
@@ -1621,6 +1727,28 @@ const extractStatusCandidate = (value: unknown): string | undefined => {
   return deep[0];
 };
 
+const readRequestStatusFromWallet = async (
+  wallet: WalletContextState,
+  requestTxId: string,
+): Promise<{ status?: string; transactionId?: string; error?: string }> => {
+  for (const reader of getRequestStatusReaders(wallet)) {
+    if (typeof reader.getRequestStatus !== "function") continue;
+    try {
+      const response = await reader.getRequestStatus(requestTxId);
+      const status = normalizeStatus(extractStatusCandidate(response));
+      const transactionId = extractTxIdCandidate(response);
+      const error = extractErrorMessage(response);
+      if (status || transactionId || error) {
+        return { status, transactionId, error };
+      }
+    } catch {
+      // Ignore and continue.
+    }
+  }
+
+  return {};
+};
+
 const readRawWalletStatus = async (
   wallet: WalletContextState,
   requestTxId: string,
@@ -1644,13 +1772,45 @@ const readRawWalletStatus = async (
   return {};
 };
 
+const findTransactionIdByRequestId = async (
+  requestTxId: string,
+  options?: { attempts?: number; delayMs?: number },
+): Promise<string | undefined> => {
+  if (isOnChainAleoTxId(requestTxId)) {
+    return requestTxId;
+  }
+
+  const attempts = options?.attempts ?? 30;
+  const delayMs = options?.delayMs ?? 4_000;
+
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      const response = await fetch(`${ALEO_EXPLORER_API}/${ALEO_EXPLORER_NETWORK}/find/transactionID/${requestTxId}`);
+      if (response.ok) {
+        const payload = await response.json();
+        if (typeof payload === "string" && isOnChainAleoTxId(payload)) {
+          return payload;
+        }
+      }
+    } catch (error) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("[InnerCircle] explorer request-id lookup failed", error);
+      }
+    }
+
+    await wait(delayMs);
+  }
+
+  return undefined;
+};
+
 export const waitForWalletExecution = async (
   wallet: WalletContextState,
   transactionId: string,
   options?: { attempts?: number; delayMs?: number; programId?: string },
 ): Promise<WalletExecutionResult> => {
-  const attempts = options?.attempts ?? 45;
-  const delayMs = options?.delayMs ?? 1500;
+  const attempts = options?.attempts ?? 60;
+  const delayMs = options?.delayMs ?? 3_000;
   let chainTxId: string | undefined;
   let lastStatus: string | undefined;
   let noStatusCounter = 0;
@@ -1689,6 +1849,40 @@ export const waitForWalletExecution = async (
   };
 
   for (let i = 0; i < attempts; i += 1) {
+    const requestStatus = await readRequestStatusFromWallet(wallet, transactionId);
+    if (requestStatus.transactionId) {
+      chainTxId = requestStatus.transactionId;
+    }
+
+    const requestStatusValue = normalizeStatus(requestStatus.status);
+    if (requestStatusValue) {
+      lastStatus = requestStatusValue;
+
+      if (chainTxId && isOnChainAleoTxId(chainTxId)) {
+        return {
+          accepted: true,
+          chainTxId,
+          lastStatus: "finalized",
+        };
+      }
+
+      if (isAcceptedWalletStatus(requestStatusValue) || requestStatusValue === "completed") {
+        if (process.env.NODE_ENV !== "production") {
+          console.log(`[waitForWalletExecution] Accepted with temp id (attempt ${i + 1}), still polling...`);
+        }
+        await wait(delayMs);
+        continue;
+      }
+
+      if (isFailedWalletStatus(requestStatusValue)) {
+        return {
+          accepted: false,
+          chainTxId,
+          lastStatus: requestStatusValue,
+        };
+      }
+    }
+
     try {
       const responseRaw = await wallet.transactionStatus(transactionId);
       // The adapter returns a structured object: { status, transactionId, error }
@@ -2210,8 +2404,12 @@ export const waitForOnChainTransactionId = async (
   wallet: WalletContextState,
   requestTxId: string,
   programId: string,
-  options?: { attempts?: number; delayMs?: number },
-): Promise<string> => {
+  options?: { attempts?: number; delayMs?: number; returnNullIfPending?: boolean },
+): Promise<string | null> => {
+  if (isOnChainAleoTxId(requestTxId)) {
+    return requestTxId;
+  }
+
   const execution = await waitForWalletExecution(wallet, requestTxId, {
     attempts: options?.attempts,
     delayMs: options?.delayMs,
@@ -2219,7 +2417,27 @@ export const waitForOnChainTransactionId = async (
   });
 
   if (!execution.accepted && !isOnChainAleoTxId(execution.chainTxId)) {
+    if (options?.returnNullIfPending) {
+      return null;
+    }
     throw new Error("Transaction was not confirmed. It may have been rejected by the wallet.");
+  }
+
+  if (execution.chainTxId && isOnChainAleoTxId(execution.chainTxId)) {
+    return execution.chainTxId;
+  }
+
+  const requestResolved = await readRequestStatusFromWallet(wallet, requestTxId);
+  if (requestResolved.transactionId && isOnChainAleoTxId(requestResolved.transactionId)) {
+    return requestResolved.transactionId;
+  }
+
+  const explorerResolvedFromRequest = await findTransactionIdByRequestId(requestTxId, {
+    attempts: options?.attempts,
+    delayMs: options?.delayMs,
+  });
+  if (explorerResolvedFromRequest && isOnChainAleoTxId(explorerResolvedFromRequest)) {
+    return explorerResolvedFromRequest;
   }
 
   const resolved = await resolveExplorerTxId(wallet, programId, requestTxId, {
@@ -2229,6 +2447,9 @@ export const waitForOnChainTransactionId = async (
   });
 
   if (!isOnChainAleoTxId(resolved)) {
+    if (options?.returnNullIfPending) {
+      return null;
+    }
     throw new Error(
       "Transaction was submitted, but the on-chain tx id is not available yet. Wait for finalization and retry.",
     );

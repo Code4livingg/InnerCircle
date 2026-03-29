@@ -16,13 +16,17 @@ const PAYMENT_PROOF_PREFIX = "innercircle_payment_proof_v1:";
 const SUBSCRIPTION_INVOICE_PREFIX = "innercircle_subscription_invoice_v1:";
 const PENDING_SUBSCRIPTION_PREFIX = "innercircle_pending_subscription_v1:";
 const PENDING_SUBSCRIPTION_PROOF_PREFIX = "innercircle_pending_subscription_proof_v1:";
+const PENDING_PROOF_KEY = (contentId: string): string => `ic_pending_proof_${contentId}`;
+const DONE_PROOF_KEY = (contentId: string): string => `ic_done_proof_${contentId}`;
 const PAYMENT_PROOF_PROGRAM_ID =
   process.env.NEXT_PUBLIC_PAYMENT_PROOF_PROGRAM_ID?.trim() || "sub_invoice_v8_xwnxp.aleo";
 const USDCX_PROGRAM_ID =
   process.env.NEXT_PUBLIC_USDCX_PROGRAM_ID?.trim() || "test_usdcx_stablecoin.aleo";
 const IS_LEGACY_PAYMENT_PROOF_PROGRAM = /^sub_invoice_v2_xwnxp\.aleo$/i.test(PAYMENT_PROOF_PROGRAM_ID);
 const ALEO_EXPLORER_API =
-  process.env.NEXT_PUBLIC_ALEO_EXPLORER_API?.trim() || "https://api.explorer.provable.com/v1";
+  process.env.NEXT_PUBLIC_ALEO_API?.trim() ||
+  process.env.NEXT_PUBLIC_ALEO_EXPLORER_API?.trim() ||
+  "https://api.explorer.provable.com/v1";
 const ALEO_MAPPING_API =
   process.env.NEXT_PUBLIC_ALEO_MAPPING_API?.trim() || "https://api.provable.com/v2/testnet/program";
 const DEFAULT_SUBSCRIPTION_BLOCKS = 15_000;
@@ -115,6 +119,12 @@ interface PendingSubscriptionProofAttempt {
   nullifier: string;
   transactionId: string;
   submittedAt: number;
+}
+
+interface PendingProofState {
+  requestId: string;
+  contentId: string;
+  startedAt: number;
 }
 
 interface SubscriptionTxFallbackReceipt {
@@ -1369,6 +1379,80 @@ const clearPendingSubscriptionProofAttempt = (circleId: string): void => {
   storage.removeItem(getPendingSubscriptionProofStorageKey(circleId));
 };
 
+export const savePendingProof = (contentId: string, requestId: string): void => {
+  const storage = getStorage();
+  if (!storage) return;
+  storage.setItem(PENDING_PROOF_KEY(contentId), JSON.stringify({
+    requestId,
+    contentId,
+    startedAt: Date.now(),
+  }));
+};
+
+export const getPendingProof = (contentId: string): PendingProofState | null => {
+  const storage = getStorage();
+  if (!storage) return null;
+
+  try {
+    const raw = storage.getItem(PENDING_PROOF_KEY(contentId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PendingProofState>;
+    if (
+      typeof parsed.requestId !== "string" ||
+      typeof parsed.contentId !== "string" ||
+      typeof parsed.startedAt !== "number"
+    ) {
+      return null;
+    }
+
+    return {
+      requestId: parsed.requestId,
+      contentId: parsed.contentId,
+      startedAt: parsed.startedAt,
+    };
+  } catch {
+    return null;
+  }
+};
+
+export const clearPendingProof = (contentId: string): void => {
+  const storage = getStorage();
+  if (!storage) return;
+  storage.removeItem(PENDING_PROOF_KEY(contentId));
+};
+
+export const saveDoneProof = (contentId: string, transcript: string, txId: string): void => {
+  const storage = getStorage();
+  if (!storage) return;
+  storage.setItem(DONE_PROOF_KEY(contentId), JSON.stringify({
+    transcript,
+    txId,
+    doneAt: Date.now(),
+  }));
+  clearPendingProof(contentId);
+};
+
+export const getDoneProof = (contentId: string): { transcript: string; txId: string } | null => {
+  const storage = getStorage();
+  if (!storage) return null;
+
+  try {
+    const raw = storage.getItem(DONE_PROOF_KEY(contentId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<{ transcript: string; txId: string }>;
+    if (typeof parsed.transcript !== "string" || typeof parsed.txId !== "string") {
+      return null;
+    }
+
+    return {
+      transcript: parsed.transcript,
+      txId: parsed.txId,
+    };
+  } catch {
+    return null;
+  }
+};
+
 const handleTranscriptFallback = async (
   txId: string,
   circleId: string,
@@ -1481,6 +1565,7 @@ export const generateSubscriptionProof = async (
   invoice: SubscriptionInvoiceReceipt,
   circleId: string,
   options?: {
+    contentId?: string;
     signerAddress?: string;
     onStatus?: (status: "accepted" | "waiting_finality" | "fetching_proof", transactionId?: string) => void;
   },
@@ -1502,52 +1587,65 @@ export const generateSubscriptionProof = async (
     );
   }
 
+  const contentId = options?.contentId?.trim() || null;
+  const buildSubscriptionProofResult = (
+    transactionId: string,
+    executionProof: string,
+  ): { proof: SubscriptionExecutionProof; transactionId: string } => ({
+    transactionId,
+    proof: {
+      programId: PAYMENT_PROOF_PROGRAM_ID,
+      transitionName: "verify_subscription",
+      publicInputs: {
+        circleId: normalizedCircleId,
+        expiresAt: invoice.expiresAt,
+        tier: invoice.tier,
+      },
+      executionProof,
+    },
+  });
+
+  if (contentId) {
+    const completedProof = getDoneProof(contentId);
+    if (completedProof) {
+      return buildSubscriptionProofResult(completedProof.txId, completedProof.transcript);
+    }
+  }
+
   const finalizeSubscriptionProofAttempt = async (
     requestTxId: string,
     submittedAt: number,
   ): Promise<{ proof: SubscriptionExecutionProof; transactionId: string }> => {
     options?.onStatus?.("accepted", requestTxId);
 
-    const buildSubscriptionProofResult = (
-      transactionId: string,
-      executionProof: string,
-    ): { proof: SubscriptionExecutionProof; transactionId: string } => ({
-      transactionId,
-      proof: {
-        programId: PAYMENT_PROOF_PROGRAM_ID,
-        transitionName: "verify_subscription",
-        publicInputs: {
-          circleId: normalizedCircleId,
-          expiresAt: invoice.expiresAt,
-          tier: invoice.tier,
-        },
-        executionProof,
-      },
-    });
-
     let chainTxId = requestTxId;
 
     try {
-      chainTxId = await waitForOnChainTransactionId(wallet, requestTxId, PAYMENT_PROOF_PROGRAM_ID, {
+      const resolvedChainTxId = await waitForOnChainTransactionId(wallet, requestTxId, PAYMENT_PROOF_PROGRAM_ID, {
         attempts: 60,
         delayMs: 2_000,
-      });
-    } catch (error) {
-      storePendingSubscriptionProofAttempt(normalizedCircleId, {
-        circleId: normalizedCircleId,
-        nullifier: invoice.nullifier,
-        transactionId: requestTxId,
-        submittedAt,
+        returnNullIfPending: true,
       });
 
-      const message = (error as Error)?.message ?? "";
-      if (
-        /transaction was submitted, but the on-chain tx id is not available yet|not finalized after/i.test(message)
-      ) {
+      if (!resolvedChainTxId) {
+        storePendingSubscriptionProofAttempt(normalizedCircleId, {
+          circleId: normalizedCircleId,
+          nullifier: invoice.nullifier,
+          transactionId: requestTxId,
+          submittedAt,
+        });
+
         options?.onStatus?.("fetching_proof", requestTxId);
-        const requestExecutionProof = await waitForExecutionTranscript(wallet, requestTxId, 60_000, 3_000);
+        const requestExecutionProof = await waitForExecutionTranscript(wallet, requestTxId, {
+          fallbackRequestId: requestTxId,
+          maxAttempts: 20,
+          intervalMs: 3_000,
+        });
         if (requestExecutionProof) {
           clearPendingSubscriptionProofAttempt(normalizedCircleId);
+          if (contentId) {
+            saveDoneProof(contentId, requestExecutionProof, requestTxId);
+          }
           return buildSubscriptionProofResult(requestTxId, requestExecutionProof);
         }
 
@@ -1555,6 +1653,9 @@ export const generateSubscriptionProof = async (
           `Verification transaction was already submitted (${requestTxId}). Wait for Aleo finalization, then press unlock again to resume without re-submitting.`,
         );
       }
+
+      chainTxId = resolvedChainTxId;
+    } catch (error) {
       throw error;
     }
 
@@ -1581,15 +1682,33 @@ export const generateSubscriptionProof = async (
     }
 
     options?.onStatus?.("fetching_proof", chainTxId);
-    const executionProof = await waitForExecutionTranscript(wallet, chainTxId);
+    const executionProof = await waitForExecutionTranscript(wallet, chainTxId, {
+      fallbackRequestId: requestTxId,
+    });
     clearPendingSubscriptionProofAttempt(normalizedCircleId);
 
     if (!executionProof) {
       throw new SubscriptionTranscriptUnavailableError(chainTxId);
     }
 
+    if (contentId) {
+      saveDoneProof(contentId, executionProof, chainTxId);
+    }
+
     return buildSubscriptionProofResult(chainTxId, executionProof);
   };
+
+  const pendingContentProof = contentId ? getPendingProof(contentId) : null;
+  if (pendingContentProof) {
+    if (Date.now() - pendingContentProof.startedAt <= 15 * 60_000) {
+      return finalizeSubscriptionProofAttempt(
+        pendingContentProof.requestId,
+        pendingContentProof.startedAt,
+      );
+    }
+
+    clearPendingProof(pendingContentProof.contentId);
+  }
 
   const pendingProofAttempt = readPendingSubscriptionProofAttempt(normalizedCircleId);
   if (
@@ -1626,6 +1745,9 @@ export const generateSubscriptionProof = async (
       transactionId: requestTxId,
       submittedAt,
     });
+    if (contentId) {
+      savePendingProof(contentId, requestTxId);
+    }
 
     if (!wallet.address || wallet.address.trim().toLowerCase() !== signerAddress) {
       throw new Error("SIGNER_CHANGED");
@@ -1634,6 +1756,9 @@ export const generateSubscriptionProof = async (
     return finalizeSubscriptionProofAttempt(requestTxId, submittedAt);
   } catch (error) {
     const message = (error as Error)?.message ?? "";
+    if (contentId && /user rejected|reject|denied|cancel|declined/i.test(message)) {
+      clearPendingProof(contentId);
+    }
     if (/must belong to the signer/i.test(message)) {
       throw new Error(
         "Payment was accepted on-chain, but the wallet has not exposed the purchased private invoice to the active signer yet. Wait for wallet sync, then retry subscribe to resume proof generation without paying again.",
@@ -1872,10 +1997,14 @@ const payAndSubscribeUnlocked = async (input: {
     }
 
     reportStatus({ stage: "awaiting_finality", route: "private_record", transactionId: requestTxId });
-    return waitForOnChainTransactionId(input.wallet, requestTxId, PAYMENT_PROOF_PROGRAM_ID, {
+    const finalizedTxId = await waitForOnChainTransactionId(input.wallet, requestTxId, PAYMENT_PROOF_PROGRAM_ID, {
       attempts: 60,
       delayMs: 2_000,
     });
+    if (!finalizedTxId) {
+      throw new Error("Subscription payment was submitted, but the on-chain tx id is not available yet.");
+    }
+    return finalizedTxId;
   };
 
   const executeDirectPublicInvoicePayment = async (): Promise<string> => {
@@ -1904,10 +2033,14 @@ const payAndSubscribeUnlocked = async (input: {
     });
 
     reportStatus({ stage: "awaiting_finality", route: "public_balance", transactionId: publicRequestTxId });
-    return waitForOnChainTransactionId(input.wallet, publicRequestTxId, PAYMENT_PROOF_PROGRAM_ID, {
+    const finalizedTxId = await waitForOnChainTransactionId(input.wallet, publicRequestTxId, PAYMENT_PROOF_PROGRAM_ID, {
       attempts: 60,
       delayMs: 2_000,
     });
+    if (!finalizedTxId) {
+      throw new Error("Subscription payment was submitted, but the on-chain tx id is not available yet.");
+    }
+    return finalizedTxId;
   };
 
   reportStatus({ stage: "selecting_route" });

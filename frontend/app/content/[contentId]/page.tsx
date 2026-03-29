@@ -7,6 +7,7 @@ import { Network } from "@provablehq/aleo-types";
 import { useAnonymousMode } from "@/features/anonymous/useAnonymousMode";
 import { displayIdentity } from "@/features/anonymous/identity";
 import {
+  clearPendingProof,
   SubscriptionTranscriptUnavailableError,
   describeSubscriptionPaymentRoute,
   generatePaymentProof,
@@ -395,6 +396,9 @@ export default function ContentPage({ params }: ContentPageProps) {
         attempts: 60,
         delayMs: 2000,
       });
+      if (!chainTxId) {
+        throw new Error("PPV purchase was submitted, but the finalized on-chain tx id is not available yet.");
+      }
 
       setPurchaseTxId(chainTxId);
       setProofProgressLabel("Generating private PPV proof...");
@@ -503,6 +507,7 @@ export default function ContentPage({ params }: ContentPageProps) {
           receipt,
           circleId,
           {
+            contentId: content.id,
             onStatus: (status, transactionId) => {
               if (transactionId) {
                 setProofTxId(transactionId);
@@ -629,6 +634,9 @@ export default function ContentPage({ params }: ContentPageProps) {
       }
     } catch (error) {
       const rawMessage = (error as Error).message || "Failed to open the content session.";
+      if (/user rejected|reject|denied|cancel|declined/i.test(rawMessage)) {
+        clearPendingProof(content.id);
+      }
       if (
         /verification transaction was already submitted|still finalizing|on-chain tx id is not available yet/i.test(
           rawMessage,

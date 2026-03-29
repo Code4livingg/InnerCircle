@@ -966,10 +966,13 @@ export default function CreatorPage({ params }: CreatorPageProps) {
           amountMicrocredits: microcredits,
         });
 
-        await waitForOnChainTransactionId(wallet, requestTxId, TIP_PROGRAM_ID, {
+        const fundedTipTxId = await waitForOnChainTransactionId(wallet, requestTxId, TIP_PROGRAM_ID, {
           attempts: 60,
           delayMs: 2000,
         });
+        if (!fundedTipTxId) {
+          throw new Error("Anonymous tip funding transaction was submitted, but the finalized on-chain tx id is not available yet.");
+        }
 
         const proveRequestTxId = await proveAnonymousTipReceipt({
           wallet,
@@ -981,6 +984,9 @@ export default function CreatorPage({ params }: CreatorPageProps) {
           attempts: 60,
           delayMs: 2000,
         });
+        if (!proofTxId) {
+          throw new Error("Anonymous tip proof transaction was submitted, but the finalized on-chain tx id is not available yet.");
+        }
 
         try {
           await runWithPendingRetry(() =>
@@ -1025,6 +1031,9 @@ export default function CreatorPage({ params }: CreatorPageProps) {
           attempts: 60,
           delayMs: 2000,
         });
+        if (!chainTxId) {
+          throw new Error("Tip transaction was submitted, but the finalized on-chain tx id is not available yet.");
+        }
 
         try {
           await runWithPendingRetry(() =>
