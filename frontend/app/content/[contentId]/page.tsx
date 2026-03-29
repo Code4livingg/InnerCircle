@@ -97,7 +97,15 @@ const formatWalletError = (message: string): string => {
   return message;
 };
 
-function RecoverProofButton({ contentId }: { contentId: string }) {
+function RecoverProofButton({
+  contentId,
+  suggestedTxId,
+  proofError,
+}: {
+  contentId: string;
+  suggestedTxId?: string | null;
+  proofError?: string | null;
+}) {
   const [show, setShow] = useState(false);
   const [txInput, setTxInput] = useState("");
   const [status, setStatus] = useState<"idle" | "recovering" | "done" | "error">("idle");
@@ -107,10 +115,22 @@ function RecoverProofButton({ contentId }: { contentId: string }) {
     const done = localStorage.getItem(`ic_done_proof_${contentId}`);
     const pending = localStorage.getItem(`ic_pending_proof_${contentId}`);
     const spent = localStorage.getItem(`aleo_spent_record_${contentId}`);
-    if (!done && (pending || spent)) {
-      setShow(true);
+    const recoverableError =
+      typeof proofError === "string" &&
+      /verify_subscription|transition not found|proof|subscription fallback|transaction/i.test(proofError);
+    if (suggestedTxId) {
+      setTxInput((current) => current || suggestedTxId);
     }
-  }, [contentId]);
+    if (!done && (pending || spent || suggestedTxId || recoverableError)) {
+      setShow(true);
+      return;
+    }
+    if (done && (suggestedTxId || recoverableError)) {
+      setShow(true);
+      return;
+    }
+    setShow(false);
+  }, [contentId, suggestedTxId, proofError]);
 
   const handleRecover = async (): Promise<void> => {
     if (!txInput.trim()) {
@@ -187,6 +207,11 @@ function RecoverProofButton({ contentId }: { contentId: string }) {
         It looks like a <code>verify_subscription</code> was already submitted. Paste your accepted transaction ID
         from Shield to recover access without resubmitting.
       </p>
+      {proofError ? (
+        <p style={{ margin: "0 0 12px", color: "#fca5a5", fontSize: "12px" }}>
+          Current error: {proofError}
+        </p>
+      ) : null}
 
       <input
         type="text"
@@ -965,7 +990,11 @@ export default function ContentPage({ params }: ContentPageProps) {
                       ? "Resume Subscription Unlock"
                       : "Subscribe to Unlock")}
               </button>
-              <RecoverProofButton contentId={contentId} />
+              <RecoverProofButton
+                contentId={contentId}
+                suggestedTxId={proofTxId}
+                proofError={proofError}
+              />
             </div>
           )}
 
