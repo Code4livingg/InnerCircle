@@ -628,7 +628,19 @@ export default function ContentPage({ params }: ContentPageProps) {
         setProofState("success");
       }
     } catch (error) {
-      setProofError(formatWalletError((error as Error).message || "Failed to open the content session."));
+      const rawMessage = (error as Error).message || "Failed to open the content session.";
+      if (
+        /verification transaction was already submitted|still finalizing|on-chain tx id is not available yet/i.test(
+          rawMessage,
+        )
+      ) {
+        setProofError(null);
+        setProofProgressLabel(rawMessage);
+        setProofState("idle");
+        return;
+      }
+
+      setProofError(formatWalletError(rawMessage));
       setProofProgressLabel(null);
       setProofState("idle");
     }

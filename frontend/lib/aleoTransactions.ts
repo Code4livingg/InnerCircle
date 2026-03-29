@@ -1744,6 +1744,14 @@ export const waitForWalletExecution = async (
       lastStatus = status;
 
       if (isAcceptedWalletStatus(status)) {
+        const awaitingResolvedTxId =
+          isTemporaryWalletTxId(transactionId) &&
+          (!chainTxId || isTemporaryWalletTxId(chainTxId));
+        if (awaitingResolvedTxId) {
+          await wait(delayMs);
+          continue;
+        }
+
         return {
           accepted: true,
           chainTxId,
@@ -1796,6 +1804,14 @@ export const waitForWalletExecution = async (
         statusLookupErrorCounter = 0;
 
         if (isAcceptedWalletStatus(status)) {
+          const awaitingResolvedTxId =
+            isTemporaryWalletTxId(transactionId) &&
+            (!chainTxId || isTemporaryWalletTxId(chainTxId));
+          if (awaitingResolvedTxId) {
+            await wait(delayMs);
+            continue;
+          }
+
           return {
             accepted: true,
             chainTxId,
