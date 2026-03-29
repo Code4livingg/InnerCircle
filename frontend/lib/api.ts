@@ -636,12 +636,20 @@ export interface StoredProofVerificationResponse {
   txHash?: string | null;
 }
 
-export interface SubscriptionUnlockRequest {
-  mode: "subscription-zk";
-  circleId: string;
-  nullifier: string;
-  executionProof: SubscriptionExecutionProof;
-}
+export type SubscriptionUnlockRequest =
+  | {
+    mode: "subscription-zk";
+    circleId: string;
+    nullifier: string;
+    executionProof: SubscriptionExecutionProof;
+  }
+  | {
+    mode: "subscription-direct";
+    creatorHandle: string;
+    purchaseTxId: string;
+    walletAddressHint?: string;
+    tierId?: string;
+  };
 
 export interface SessionProofPayload {
   txId: string;

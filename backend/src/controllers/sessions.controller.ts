@@ -413,6 +413,61 @@ export const createAccessSession = async (req: AnonOrWalletRequest, res: Respons
       }
 
       const expectedPriceMicrocredits = tierRecord?.priceMicrocredits ?? creator.subscriptionPriceMicrocredits;
+      const walletSession = req.walletSession;
+      const existingPurchase = walletSession
+        ? await prisma.subscriptionPurchase.findFirst({
+          where: {
+            txId: payload.purchaseTxId,
+            walletHash: walletSession.wh,
+            creatorId: creator.id,
+          },
+          select: {
+            verifiedAt: true,
+            expiresAt: true,
+            subscriptionTierId: true,
+            priceMicrocredits: true,
+          },
+        })
+        : null;
+
+      if (walletSession && existingPurchase) {
+        if (walletSession.wh === creator.walletHash) {
+          res.status(409).json({
+            error: "Creator wallets cannot open fan subscription sessions.",
+            code: "ROLE_CONFLICT",
+            existingRole: "creator",
+            requestedRole: "user",
+          });
+          return;
+        }
+
+        await ensureWalletRoleByHash(walletSession.wh, "FAN");
+
+        if (payload.tierId && existingPurchase.subscriptionTierId !== payload.tierId) {
+          res.status(409).json({ error: "Subscription tier does not match verified purchase.", code: "TIER_MISMATCH" });
+          return;
+        }
+
+        const activeUntil = getSubscriptionActiveUntil(existingPurchase.verifiedAt, existingPurchase.expiresAt ?? null);
+        if (activeUntil.getTime() <= Date.now()) {
+          res.status(409).json({ error: "Subscription expired. Purchase again to continue.", code: "SUBSCRIPTION_EXPIRED" });
+          return;
+        }
+
+        const session = createSessionToken({
+          identitySeed: walletSession.wh,
+          scope: {
+            type: "subscription",
+            creatorId: creator.handle,
+            verifiedBy: "payment",
+            tier: tierFromPriceMicrocredits(existingPurchase.priceMicrocredits ?? expectedPriceMicrocredits),
+            expiresAt: activeUntil.getTime(),
+            entitlementBound: true,
+          },
+        });
+        res.json({ sessionToken: session.token, sessionId: session.sessionId, expiresAt: session.expiresAt });
+        return;
+      }
 
       const verified = await verifySubscriptionPayment({
         creatorFieldId: creator.creatorFieldId,

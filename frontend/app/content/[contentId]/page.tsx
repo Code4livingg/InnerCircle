@@ -790,13 +790,16 @@ export default function ContentPage({ params }: ContentPageProps) {
 
         setProofProgressLabel("Opening on-chain subscription session...");
         const session = await runWithPendingRetry(() =>
-          createSession({
-            mode: "subscription-direct",
-            creatorHandle: content.creator.handle,
-            purchaseTxId,
-            walletAddressHint: signerAddress,
-            tierId: tierIdForSync,
-          }),
+          unlockSubscriptionSession(
+            {
+              mode: "subscription-direct",
+              creatorHandle: content.creator.handle,
+              purchaseTxId,
+              walletAddressHint: signerAddress,
+              tierId: tierIdForSync,
+            },
+            walletToken,
+          ),
         );
         await activateTraceSession(session.sessionToken, signerAddress);
         setSessionToken(session.sessionToken);
