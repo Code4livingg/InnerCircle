@@ -232,8 +232,9 @@ const verifyMatchedExecuteTransition = ({
   if (typeof expectedPriceMicrocredits === "bigint") {
     const priceInputs = publicInputs.filter((value) => normalizeLiteral(value) !== normalizeLiteral(expectedField));
     if (hasUnsignedIntegerLiteral(priceInputs)) {
-      const expectedPrice = toU64Literal(expectedPriceMicrocredits);
-      if (!includesLiteral(priceInputs, expectedPrice)) {
+      const expectedU64Price = toU64Literal(expectedPriceMicrocredits);
+      const expectedU128Price = `${expectedPriceMicrocredits}u128`;
+      if (!includesLiteral(priceInputs, expectedU64Price) && !includesLiteral(priceInputs, expectedU128Price)) {
         throw new Error(`${transition.function} public ${expectedPriceLabel ?? "amount"} mismatch`);
       }
     }
