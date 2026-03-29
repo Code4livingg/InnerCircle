@@ -1508,6 +1508,23 @@ export const generateSubscriptionProof = async (
   ): Promise<{ proof: SubscriptionExecutionProof; transactionId: string }> => {
     options?.onStatus?.("accepted", requestTxId);
 
+    const buildSubscriptionProofResult = (
+      transactionId: string,
+      executionProof: string,
+    ): { proof: SubscriptionExecutionProof; transactionId: string } => ({
+      transactionId,
+      proof: {
+        programId: PAYMENT_PROOF_PROGRAM_ID,
+        transitionName: "verify_subscription",
+        publicInputs: {
+          circleId: normalizedCircleId,
+          expiresAt: invoice.expiresAt,
+          tier: invoice.tier,
+        },
+        executionProof,
+      },
+    });
+
     let chainTxId = requestTxId;
 
     try {
@@ -1527,6 +1544,13 @@ export const generateSubscriptionProof = async (
       if (
         /transaction was submitted, but the on-chain tx id is not available yet|not finalized after/i.test(message)
       ) {
+        options?.onStatus?.("fetching_proof", requestTxId);
+        const requestExecutionProof = await waitForExecutionTranscript(wallet, requestTxId, 60_000, 3_000);
+        if (requestExecutionProof) {
+          clearPendingSubscriptionProofAttempt(normalizedCircleId);
+          return buildSubscriptionProofResult(requestTxId, requestExecutionProof);
+        }
+
         throw new Error(
           `Verification transaction was already submitted (${requestTxId}). Wait for Aleo finalization, then press unlock again to resume without re-submitting.`,
         );
@@ -1564,19 +1588,7 @@ export const generateSubscriptionProof = async (
       throw new SubscriptionTranscriptUnavailableError(chainTxId);
     }
 
-    return {
-      transactionId: chainTxId,
-      proof: {
-        programId: PAYMENT_PROOF_PROGRAM_ID,
-        transitionName: "verify_subscription",
-        publicInputs: {
-          circleId: normalizedCircleId,
-          expiresAt: invoice.expiresAt,
-          tier: invoice.tier,
-        },
-        executionProof,
-      },
-    };
+    return buildSubscriptionProofResult(chainTxId, executionProof);
   };
 
   const pendingProofAttempt = readPendingSubscriptionProofAttempt(normalizedCircleId);
