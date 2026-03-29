@@ -1,13 +1,13 @@
 {
     "DocumentName":  "AWS-RunShellScript",
     "InstanceIds":  [
-                        "i-0fe6ec9522ee91cef"
+                        "REPLACE_WITH_INSTANCE_ID"
                     ],
     "Comment":  "Inspect live stream backend state and recent logs",
     "Parameters":  {
                        "commands":  [
-                                        "bash -lc \u0027curl -fsS http://127.0.0.1:8080/api/livestreams 2\u003e/tmp/codex_live_err || true; echo ---ERR---; cat /tmp/codex_live_err || true\u0027",
-                                        "bash -lc \u0027journalctl -u innercircle-backend -n 120 --no-pager | tail -n 120\u0027"
+                                        "bash -lc \u0027curl -fsS http://HEALTHCHECK_HOST:HEALTHCHECK_PORT/api/livestreams 2\u003e/tmp/codex_live_err || true; echo ---ERR---; cat /tmp/codex_live_err || true\u0027",
+                                        "bash -lc \u0027journalctl -u APP_SERVICE_NAME -n 120 --no-pager | tail -n 120\u0027"
                                     ]
                    }
 }

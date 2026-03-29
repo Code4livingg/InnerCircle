@@ -1,17 +1,17 @@
 {
     "DocumentName": "AWS-RunShellScript",
     "InstanceIds": [
-        "i-0fe6ec9522ee91cef"
+        "REPLACE_WITH_INSTANCE_ID"
     ],
     "Comment": "Deploy anonymous session backend changes and apply anon_sessions migration",
     "Parameters": {
         "commands": [
             "export HOME=/root",
-            "git config --global --add safe.directory /opt/innercircle",
-            "cd /opt/innercircle",
+            "git config --global --add safe.directory /path/to/app-root",
+            "cd /path/to/app-root",
             "git fetch origin main",
             "git checkout origin/main -- backend/prisma/schema.prisma backend/prisma/migrations/20260327213000_add_anon_sessions/migration.sql backend/src/app.ts backend/src/controllers/anon.controller.ts backend/src/controllers/content.controller.ts backend/src/controllers/media.controller.ts backend/src/controllers/sessions.controller.ts backend/src/middleware/requireAnonOrWallet.ts backend/src/routes/anon.routes.ts backend/src/routes/content.routes.ts backend/src/routes/index.ts backend/src/routes/sessions.routes.ts backend/src/services/aleoExplorerService.ts backend/src/services/anonymousSessionService.ts backend/src/services/sessionService.ts backend/src/types/session.ts",
-            "cd /opt/innercircle/backend",
+            "cd /path/to/backend",
             "export LANG=C.UTF-8",
             "export LC_ALL=C.UTF-8",
             "export CI=1",
@@ -20,7 +20,7 @@
             "npm run db:generate > /tmp/db_generate_anon.log 2>&1",
             "npx prisma migrate deploy --schema prisma/schema.prisma > /tmp/migrate_anon.log 2>&1",
             "npm run build > /tmp/build_anon.log 2>&1",
-            "systemctl restart innercircle-backend",
+            "systemctl restart APP_SERVICE_NAME",
             "sleep 5",
             "echo ===DB_GENERATE===",
             "tail -n 20 /tmp/db_generate_anon.log | tr -cd \"\\\\11\\\\12\\\\15\\\\40-\\\\176\"",
@@ -32,9 +32,9 @@
             "tail -n 20 /tmp/build_anon.log | tr -cd \"\\\\11\\\\12\\\\15\\\\40-\\\\176\"",
             "echo",
             "echo ===STATUS===",
-            "systemctl is-active innercircle-backend",
+            "systemctl is-active APP_SERVICE_NAME",
             "echo ===HEALTH===",
-            "curl -fsS http://127.0.0.1:8080/api/health"
+            "curl -fsS http://HEALTHCHECK_HOST:HEALTHCHECK_PORT/api/health"
         ]
     }
 }

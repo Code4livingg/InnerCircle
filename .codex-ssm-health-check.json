@@ -1,14 +1,14 @@
 {
     "DocumentName":  "AWS-RunShellScript",
     "InstanceIds":  [
-                        "i-0fe6ec9522ee91cef"
+                        "REPLACE_WITH_INSTANCE_ID"
                     ],
     "Comment":  "Verify backend health after IVS channel migration",
     "Parameters":  {
                        "commands":  [
                                         "sleep 5",
-                                        "systemctl is-active innercircle-backend",
-                                        "curl -fsS http://127.0.0.1:8080/api/health"
+                                        "systemctl is-active APP_SERVICE_NAME",
+                                        "curl -fsS http://HEALTHCHECK_HOST:HEALTHCHECK_PORT/api/health"
                                     ]
                    }
 }

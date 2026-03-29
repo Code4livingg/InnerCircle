@@ -1,16 +1,16 @@
 {
     "DocumentName":  "AWS-RunShellScript",
     "InstanceIds":  [
-                        "i-0fe6ec9522ee91cef"
+                        "REPLACE_WITH_INSTANCE_ID"
                     ],
     "Comment":  "Stop all active InnerCircle live streams",
     "Parameters":  {
                        "commands":  [
                                         "set -e",
-                                        "echo \u0027aW1wb3J0IHsgcHJpc21hIH0gZnJvbSAiLi9kaXN0L2RiL3ByaXNtYS5qcyI7CmltcG9ydCB7IGVuZEl2c0NoYW5uZWwgfSBmcm9tICIuL2Rpc3Qvc2VydmljZXMvaXZzU2VydmljZS5qcyI7Cgpjb25zdCBhY3RpdmUgPSBhd2FpdCBwcmlzbWEubGl2ZVN0cmVhbS5maW5kTWFueSh7CiAgd2hlcmU6IHsgc3RhdHVzOiAibGl2ZSIgfSwKICBzZWxlY3Q6IHsgaWQ6IHRydWUsIHRpdGxlOiB0cnVlLCBjcmVhdG9yOiB7IHNlbGVjdDogeyBoYW5kbGU6IHRydWUgfSB9IH0sCiAgb3JkZXJCeTogeyBzdGFydGVkQXQ6ICJkZXNjIiB9LAp9KTsKCmNvbnNvbGUubG9nKEpTT04uc3RyaW5naWZ5KHsgYWN0aXZlQmVmb3JlOiBhY3RpdmUgfSwgbnVsbCwgMikpOwoKZm9yIChjb25zdCBzdHJlYW0gb2YgYWN0aXZlKSB7CiAgdHJ5IHsKICAgIGF3YWl0IGVuZEl2c0NoYW5uZWwoc3RyZWFtLmlkKTsKICAgIGNvbnNvbGUubG9nKEpTT04uc3RyaW5naWZ5KHsgc3RvcHBlZDogc3RyZWFtLmlkLCB0aXRsZTogc3RyZWFtLnRpdGxlLCBoYW5kbGU6IHN0cmVhbS5jcmVhdG9yLmhhbmRsZSB9KSk7CiAgfSBjYXRjaCAoZXJyb3IpIHsKICAgIGNvbnNvbGUuZXJyb3IoSlNPTi5zdHJpbmdpZnkoeyBmYWlsZWQ6IHN0cmVhbS5pZCwgbWVzc2FnZTogZXJyb3IgaW5zdGFuY2VvZiBFcnJvciA/IGVycm9yLm1lc3NhZ2UgOiBTdHJpbmcoZXJyb3IpIH0pKTsKICAgIHRocm93IGVycm9yOwogIH0KfQoKY29uc3QgcmVtYWluaW5nID0gYXdhaXQgcHJpc21hLmxpdmVTdHJlYW0uZmluZE1hbnkoewogIHdoZXJlOiB7IHN0YXR1czogImxpdmUiIH0sCiAgc2VsZWN0OiB7IGlkOiB0cnVlLCB0aXRsZTogdHJ1ZSwgY3JlYXRvcjogeyBzZWxlY3Q6IHsgaGFuZGxlOiB0cnVlIH0gfSB9LAogIG9yZGVyQnk6IHsgc3RhcnRlZEF0OiAiZGVzYyIgfSwKfSk7Cgpjb25zb2xlLmxvZyhKU09OLnN0cmluZ2lmeSh7IGFjdGl2ZUFmdGVyOiByZW1haW5pbmcgfSwgbnVsbCwgMikpOwphd2FpdCBwcmlzbWEuJGRpc2Nvbm5lY3QoKTs=\u0027 | base64 -d \u003e /opt/innercircle/backend/codex_stop_live_streams.mjs",
-                                        "cd /opt/innercircle/backend",
+                                        "echo \u0027aW1wb3J0IHsgcHJpc21hIH0gZnJvbSAiLi9kaXN0L2RiL3ByaXNtYS5qcyI7CmltcG9ydCB7IGVuZEl2c0NoYW5uZWwgfSBmcm9tICIuL2Rpc3Qvc2VydmljZXMvaXZzU2VydmljZS5qcyI7Cgpjb25zdCBhY3RpdmUgPSBhd2FpdCBwcmlzbWEubGl2ZVN0cmVhbS5maW5kTWFueSh7CiAgd2hlcmU6IHsgc3RhdHVzOiAibGl2ZSIgfSwKICBzZWxlY3Q6IHsgaWQ6IHRydWUsIHRpdGxlOiB0cnVlLCBjcmVhdG9yOiB7IHNlbGVjdDogeyBoYW5kbGU6IHRydWUgfSB9IH0sCiAgb3JkZXJCeTogeyBzdGFydGVkQXQ6ICJkZXNjIiB9LAp9KTsKCmNvbnNvbGUubG9nKEpTT04uc3RyaW5naWZ5KHsgYWN0aXZlQmVmb3JlOiBhY3RpdmUgfSwgbnVsbCwgMikpOwoKZm9yIChjb25zdCBzdHJlYW0gb2YgYWN0aXZlKSB7CiAgdHJ5IHsKICAgIGF3YWl0IGVuZEl2c0NoYW5uZWwoc3RyZWFtLmlkKTsKICAgIGNvbnNvbGUubG9nKEpTT04uc3RyaW5naWZ5KHsgc3RvcHBlZDogc3RyZWFtLmlkLCB0aXRsZTogc3RyZWFtLnRpdGxlLCBoYW5kbGU6IHN0cmVhbS5jcmVhdG9yLmhhbmRsZSB9KSk7CiAgfSBjYXRjaCAoZXJyb3IpIHsKICAgIGNvbnNvbGUuZXJyb3IoSlNPTi5zdHJpbmdpZnkoeyBmYWlsZWQ6IHN0cmVhbS5pZCwgbWVzc2FnZTogZXJyb3IgaW5zdGFuY2VvZiBFcnJvciA/IGVycm9yLm1lc3NhZ2UgOiBTdHJpbmcoZXJyb3IpIH0pKTsKICAgIHRocm93IGVycm9yOwogIH0KfQoKY29uc3QgcmVtYWluaW5nID0gYXdhaXQgcHJpc21hLmxpdmVTdHJlYW0uZmluZE1hbnkoewogIHdoZXJlOiB7IHN0YXR1czogImxpdmUiIH0sCiAgc2VsZWN0OiB7IGlkOiB0cnVlLCB0aXRsZTogdHJ1ZSwgY3JlYXRvcjogeyBzZWxlY3Q6IHsgaGFuZGxlOiB0cnVlIH0gfSB9LAogIG9yZGVyQnk6IHsgc3RhcnRlZEF0OiAiZGVzYyIgfSwKfSk7Cgpjb25zb2xlLmxvZyhKU09OLnN0cmluZ2lmeSh7IGFjdGl2ZUFmdGVyOiByZW1haW5pbmcgfSwgbnVsbCwgMikpOwphd2FpdCBwcmlzbWEuJGRpc2Nvbm5lY3QoKTs=\u0027 | base64 -d \u003e /path/to/backend/codex_stop_live_streams.mjs",
+                                        "cd /path/to/backend",
                                         "node ./codex_stop_live_streams.mjs",
-                                        "rm -f /opt/innercircle/backend/codex_stop_live_streams.mjs"
+                                        "rm -f /path/to/backend/codex_stop_live_streams.mjs"
                                     ]
                    }
 }

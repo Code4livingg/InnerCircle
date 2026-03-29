@@ -28,3 +28,8 @@ Thumbs.db
 # Local scratch / deployment artifacts
 /tmp/
 /.codex-tmp-local-backup/
+*.tar.gz
+*.tar
+*.zip
+leo_lines.txt
+*.log

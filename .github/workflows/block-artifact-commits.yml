@@ -1,0 +1,45 @@
+name: Block Artifact Commits
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  reject-artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fail on build artifacts, local scratch files, and archives
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base_sha="${{ github.event.pull_request.base.sha }}"
+          else
+            base_sha="${{ github.event.before }}"
+          fi
+
+          if [[ -z "${base_sha}" || "${base_sha}" == "0000000000000000000000000000000000000000" ]]; then
+            base_sha="$(git rev-list --max-parents=0 HEAD)"
+          fi
+
+          changed_files="$(git diff --name-only --diff-filter=ACMRT "${base_sha}" "${GITHUB_SHA}")"
+
+          if [[ -z "${changed_files}" ]]; then
+            exit 0
+          fi
+
+          blocked_files="$(printf '%s\n' "${changed_files}" | grep -E '(^tmp/|(^|/).*\.(tar\.gz|tar|zip|log)$|(^|/)leo_lines\.txt$)' || true)"
+
+          if [[ -n "${blocked_files}" ]]; then
+            echo "Blocked files detected:"
+            printf '%s\n' "${blocked_files}"
+            exit 1
+          fi

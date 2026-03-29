@@ -1,18 +1,18 @@
 {
     "DocumentName":  "AWS-RunShellScript",
     "InstanceIds":  [
-                        "i-0fe6ec9522ee91cef"
+                        "REPLACE_WITH_INSTANCE_ID"
                     ],
     "Comment":  "Apply IVS channel reuse migration and restart backend",
     "Parameters":  {
                        "commands":  [
                                         "set -e",
-                                        "mkdir -p /opt/innercircle/backend/prisma/migrations/20260327113000_allow_reusing_static_ivs_channel",
-                                        "echo \u0027LS0gQWxsb3cgbXVsdGlwbGUgbGl2ZSBzdHJlYW0gc2Vzc2lvbnMgdG8gcmV1c2UgdGhlIHNhbWUgc3RhdGljIElWUyBjaGFubmVsLgpEUk9QIElOREVYIElGIEVYSVNUUyAiTGl2ZVN0cmVhbV9pdnNDaGFubmVsQXJuX2tleSI7CgpDUkVBVEUgSU5ERVggSUYgTk9UIEVYSVNUUyAiTGl2ZVN0cmVhbV9pdnNDaGFubmVsQXJuX2lkeCIgT04gIkxpdmVTdHJlYW0iKCJpdnNDaGFubmVsQXJuIik7Cg==\u0027 | base64 -d \u003e /opt/innercircle/backend/prisma/migrations/20260327113000_allow_reusing_static_ivs_channel/migration.sql",
-                                        "bash -lc \u0027cd /opt/innercircle/backend \u0026\u0026 export CI=1 NO_COLOR=1 PRISMA_HIDE_UPDATE_MESSAGE=1 \u0026\u0026 npx prisma migrate deploy --schema prisma/schema.prisma \u003e /tmp/codex_prisma_migrate.log 2\u003e\u00261; rc=True; tr -cd \u0027\\\u0027\u0027\\\\11\\\\12\\\\15\\\\40-\\\\176\u0027\\\u0027\u0027 \u003c /tmp/codex_prisma_migrate.log; exit \u0027",
-                                        "systemctl restart innercircle-backend",
-                                        "systemctl is-active innercircle-backend",
-                                        "curl -fsS http://127.0.0.1:8080/api/health"
+                                        "mkdir -p /path/to/backend/prisma/migrations/20260327113000_allow_reusing_static_ivs_channel",
+                                        "echo \u0027LS0gQWxsb3cgbXVsdGlwbGUgbGl2ZSBzdHJlYW0gc2Vzc2lvbnMgdG8gcmV1c2UgdGhlIHNhbWUgc3RhdGljIElWUyBjaGFubmVsLgpEUk9QIElOREVYIElGIEVYSVNUUyAiTGl2ZVN0cmVhbV9pdnNDaGFubmVsQXJuX2tleSI7CgpDUkVBVEUgSU5ERVggSUYgTk9UIEVYSVNUUyAiTGl2ZVN0cmVhbV9pdnNDaGFubmVsQXJuX2lkeCIgT04gIkxpdmVTdHJlYW0iKCJpdnNDaGFubmVsQXJuIik7Cg==\u0027 | base64 -d \u003e /path/to/backend/prisma/migrations/20260327113000_allow_reusing_static_ivs_channel/migration.sql",
+                                        "bash -lc \u0027cd /path/to/backend \u0026\u0026 export CI=1 NO_COLOR=1 PRISMA_HIDE_UPDATE_MESSAGE=1 \u0026\u0026 npx prisma migrate deploy --schema prisma/schema.prisma \u003e /tmp/codex_prisma_migrate.log 2\u003e\u00261; rc=True; tr -cd \u0027\\\u0027\u0027\\\\11\\\\12\\\\15\\\\40-\\\\176\u0027\\\u0027\u0027 \u003c /tmp/codex_prisma_migrate.log; exit \u0027",
+                                        "systemctl restart APP_SERVICE_NAME",
+                                        "systemctl is-active APP_SERVICE_NAME",
+                                        "curl -fsS http://HEALTHCHECK_HOST:HEALTHCHECK_PORT/api/health"
                                     ]
                    }
 }

@@ -1,0 +1,17 @@
+#!/usr/bin/env sh
+set -eu
+
+staged_files="$(git diff --cached --name-only --diff-filter=ACMRT)"
+
+if [ -z "$staged_files" ]; then
+  exit 0
+fi
+
+blocked_files="$(printf '%s\n' "$staged_files" | grep -E '(^tmp/|(^|/).*\.(tar\.gz|tar|zip|log)$|(^|/)leo_lines\.txt$)' || true)"
+
+if [ -n "$blocked_files" ]; then
+  printf '%s\n' 'Refusing to commit generated artifacts or local scratch files:' >&2
+  printf '%s\n' "$blocked_files" >&2
+  printf '%s\n' 'Remove them from the index before committing.' >&2
+  exit 1
+fi
