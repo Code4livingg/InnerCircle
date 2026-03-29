@@ -24,3 +24,7 @@ coverage/
 Thumbs.db
 .vscode/
 .idea/
+
+# Local scratch / deployment artifacts
+/tmp/
+/.codex-tmp-local-backup/
