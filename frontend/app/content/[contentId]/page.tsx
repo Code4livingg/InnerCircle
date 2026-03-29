@@ -97,6 +97,154 @@ const formatWalletError = (message: string): string => {
   return message;
 };
 
+function RecoverProofButton({ contentId }: { contentId: string }) {
+  const [show, setShow] = useState(false);
+  const [txInput, setTxInput] = useState("");
+  const [status, setStatus] = useState<"idle" | "recovering" | "done" | "error">("idle");
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    const done = localStorage.getItem(`ic_done_proof_${contentId}`);
+    const pending = localStorage.getItem(`ic_pending_proof_${contentId}`);
+    const spent = localStorage.getItem(`aleo_spent_record_${contentId}`);
+    if (!done && (pending || spent)) {
+      setShow(true);
+    }
+  }, [contentId]);
+
+  const handleRecover = async (): Promise<void> => {
+    if (!txInput.trim()) {
+      setMessage("Please paste your accepted transaction ID from Shield.");
+      return;
+    }
+
+    setStatus("recovering");
+    setMessage("Attempting proof recovery...");
+
+    try {
+      localStorage.removeItem(`ic_pending_proof_${contentId}`);
+      localStorage.removeItem(`aleo_spent_record_${contentId}`);
+      localStorage.removeItem(`aleo_pending_tx_${contentId}`);
+      localStorage.removeItem(`invoice_route_${contentId}`);
+
+      let transcript: string | null = null;
+      const txId = txInput.trim();
+
+      if (txId.startsWith("at1")) {
+        try {
+          const response = await fetch(`https://api.explorer.provable.com/v1/testnet/transaction/${txId}`);
+          if (response.ok) {
+            const data = await response.json();
+            transcript =
+              data?.execution?.transitions?.[0]?.proof ??
+              data?.transaction?.execution?.transitions?.[0]?.proof ??
+              data?.proof ??
+              data?.transcript ??
+              null;
+          }
+        } catch {
+          // Ignore explorer read failures and let on-chain fallback handle recovery.
+        }
+      }
+
+      localStorage.setItem(`ic_done_proof_${contentId}`, JSON.stringify({
+        txId,
+        transcript,
+        doneAt: Date.now(),
+        recovered: true,
+      }));
+
+      setStatus("done");
+      setMessage("Recovery saved. Refreshing...");
+
+      setTimeout(() => {
+        window.location.reload();
+      }, 1500);
+    } catch (error) {
+      setStatus("error");
+      setMessage((error as Error)?.message || "Recovery failed. Try again.");
+    }
+  };
+
+  if (!show) return null;
+
+  return (
+    <div
+      style={{
+        marginTop: "12px",
+        padding: "16px",
+        borderRadius: "10px",
+        border: "1px solid #f59e0b",
+        background: "#1c1a14",
+        color: "#fef3c7",
+        fontSize: "13px",
+      }}
+    >
+      <p style={{ margin: "0 0 8px", fontWeight: 600, color: "#f59e0b" }}>
+        Previous transaction detected
+      </p>
+      <p style={{ margin: "0 0 12px", color: "#d1d5db" }}>
+        It looks like a <code>verify_subscription</code> was already submitted. Paste your accepted transaction ID
+        from Shield to recover access without resubmitting.
+      </p>
+
+      <input
+        type="text"
+        placeholder="Paste Shield tx id (at1... or shield_...)"
+        value={txInput}
+        onChange={(event) => setTxInput(event.target.value)}
+        style={{
+          width: "100%",
+          padding: "8px 12px",
+          borderRadius: "6px",
+          border: "1px solid #374151",
+          background: "#111827",
+          color: "#f9fafb",
+          fontSize: "12px",
+          marginBottom: "10px",
+          boxSizing: "border-box",
+        }}
+      />
+
+      <button
+        type="button"
+        onClick={handleRecover}
+        disabled={status === "recovering" || status === "done"}
+        style={{
+          width: "100%",
+          padding: "10px",
+          borderRadius: "6px",
+          background: status === "done" ? "#065f46" : "#b45309",
+          color: "#fff",
+          fontWeight: 600,
+          fontSize: "13px",
+          border: "none",
+          cursor: status === "recovering" ? "wait" : "pointer",
+          opacity: status === "recovering" ? 0.7 : 1,
+        }}
+      >
+        {status === "recovering"
+          ? "Recovering..."
+          : status === "done"
+            ? "Recovered"
+            : "Recover Accepted Proof"}
+      </button>
+
+      {message ? (
+        <p
+          style={{
+            marginTop: "8px",
+            color: status === "error" ? "#f87171" : status === "done" ? "#6ee7b7" : "#9ca3af",
+            fontSize: "12px",
+          }}
+        >
+          {message}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 export default function ContentPage({ params }: ContentPageProps) {
   const { contentId } = use(params);
   const wallet = useWallet();
@@ -817,6 +965,7 @@ export default function ContentPage({ params }: ContentPageProps) {
                       ? "Resume Subscription Unlock"
                       : "Subscribe to Unlock")}
               </button>
+              <RecoverProofButton contentId={contentId} />
             </div>
           )}
 

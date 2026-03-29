@@ -127,6 +127,11 @@ interface PendingProofState {
   startedAt: number;
 }
 
+interface DoneProofState {
+  transcript: string | null;
+  txId: string;
+}
+
 interface SubscriptionTxFallbackReceipt {
   txId: string;
   circleId: string;
@@ -1421,7 +1426,7 @@ export const clearPendingProof = (contentId: string): void => {
   storage.removeItem(PENDING_PROOF_KEY(contentId));
 };
 
-export const saveDoneProof = (contentId: string, transcript: string, txId: string): void => {
+export const saveDoneProof = (contentId: string, transcript: string | null, txId: string): void => {
   const storage = getStorage();
   if (!storage) return;
   storage.setItem(DONE_PROOF_KEY(contentId), JSON.stringify({
@@ -1432,20 +1437,26 @@ export const saveDoneProof = (contentId: string, transcript: string, txId: strin
   clearPendingProof(contentId);
 };
 
-export const getDoneProof = (contentId: string): { transcript: string; txId: string } | null => {
+export const getDoneProof = (contentId: string): DoneProofState | null => {
   const storage = getStorage();
   if (!storage) return null;
 
   try {
     const raw = storage.getItem(DONE_PROOF_KEY(contentId));
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<{ transcript: string; txId: string }>;
-    if (typeof parsed.transcript !== "string" || typeof parsed.txId !== "string") {
+    const parsed = JSON.parse(raw) as Partial<DoneProofState>;
+    if (
+      parsed.transcript !== null &&
+      typeof parsed.transcript !== "string"
+    ) {
+      return null;
+    }
+    if (typeof parsed.txId !== "string") {
       return null;
     }
 
     return {
-      transcript: parsed.transcript,
+      transcript: parsed.transcript ?? null,
       txId: parsed.txId,
     };
   } catch {
@@ -1608,6 +1619,12 @@ export const generateSubscriptionProof = async (
   if (contentId) {
     const completedProof = getDoneProof(contentId);
     if (completedProof) {
+      if (!completedProof.transcript) {
+        throw new SubscriptionTranscriptUnavailableError(
+          completedProof.txId,
+          "Recovered transaction found without a cached transcript. Falling back to on-chain verification.",
+        );
+      }
       return buildSubscriptionProofResult(completedProof.txId, completedProof.transcript);
     }
   }
