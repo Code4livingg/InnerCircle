@@ -1,0 +1,13 @@
+{
+    "DocumentName":  "AWS-RunShellScript",
+    "InstanceIds":  [
+                        "i-0fe6ec9522ee91cef"
+                    ],
+    "Comment":  "Inspect IVS live stream logs",
+    "Parameters":  {
+                       "commands":  [
+                                        "journalctl -u innercircle-backend -n 300 --no-pager | grep \"IVS:\" || true",
+                                        "journalctl -u innercircle-backend -n 300 --no-pager | grep \"/api/livestreams/\" || true"
+                                    ]
+                   }
+}

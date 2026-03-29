@@ -1,0 +1,12 @@
+{
+    "DocumentName":  "AWS-RunShellScript",
+    "InstanceIds":  [
+                        "i-0fe6ec9522ee91cef"
+                    ],
+    "Comment":  "Check Prisma migration status after IVS channel reuse migration",
+    "Parameters":  {
+                       "commands":  [
+                                        "bash -lc \u0027cd /opt/innercircle/backend \u0026\u0026 export CI=1 NO_COLOR=1 PRISMA_HIDE_UPDATE_MESSAGE=1 \u0026\u0026 npx prisma migrate status --schema prisma/schema.prisma \u003e /tmp/codex_prisma_status.log 2\u003e\u00261; rc=True; tr -cd \u0027\\\u0027\u0027\\\\11\\\\12\\\\15\\\\40-\\\\176\u0027\\\u0027\u0027 \u003c /tmp/codex_prisma_status.log; exit \u0027"
+                                    ]
+                   }
+}

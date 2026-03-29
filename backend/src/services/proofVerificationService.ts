@@ -833,33 +833,59 @@ export const verifyTipProof = async (
 ): Promise<VerifiedOwnership> => {
   if (env.proofVerificationMode === "mock") {
     return {
-      walletHash: subjectHash(`${env.tipProgramId}:tip_private:${input.txId ?? input.creatorFieldId}`),
+      walletHash: subjectHash(`${env.tipProgramId}:prove_tip_v2:${input.txId ?? input.creatorFieldId}`),
       resourceFieldId: input.creatorFieldId,
       provedByTxId: input.txId,
     };
   }
 
   if (!input.txId) {
-    throw new Error("Missing txId. Expected an on-chain execute tx calling tip_private.");
+    throw new Error("Missing txId. Expected an on-chain execute tx calling prove_tip_v2.");
   }
 
   const tx = await fetchExplorerTx(input.txId);
-  const transition = findTransition(tx, env.tipProgramId, "tip_private");
-  if (!transition) {
-    throw new Error("tip_private transition not found in transaction");
+  const proofTransition =
+    findTransition(tx, env.tipProgramId, "prove_tip_v2") ??
+    findTransition(tx, env.tipProgramId, "prove_tip");
+
+  if (proofTransition) {
+    if (!txAppearsAccepted(tx)) {
+      throw new Error(`Transaction ${input.txId} is not accepted yet`);
+    }
+
+    const publicInputs = publicInputsFromTransition(proofTransition);
+    assertIncludesLiteral(publicInputs, toFieldLiteral(input.creatorFieldId), `${proofTransition.function} public creatorId`);
+    assertIncludesLiteral(publicInputs, toU64Literal(input.amountMicrocredits), `${proofTransition.function} public amount`);
+
+    return {
+      walletHash: subjectHash(`${env.tipProgramId}:${proofTransition.function}:${input.txId}`),
+      resourceFieldId: input.creatorFieldId,
+      provedByTxId: input.txId,
+    };
+  }
+
+  if (findTransition(tx, env.tipProgramId, "tip_private_v3")) {
+    throw new Error("tip_private_v3 payment tx is private. Submit the prove_tip_v2 txId for backend verification.");
+  }
+
+  const legacyTransition =
+    findTransition(tx, env.tipProgramId, "tip_private") ??
+    findTransition(tx, env.tipProgramId, "tip_private_v2");
+  if (!legacyTransition) {
+    throw new Error("prove_tip_v2 or legacy tip_private transition not found in transaction");
   }
 
   if (!txAppearsAccepted(tx)) {
     throw new Error(`Transaction ${input.txId} is not accepted yet`);
   }
 
-  const publicInputs = publicInputsFromTransition(transition);
-  assertIncludesLiteral(publicInputs, toFieldLiteral(input.creatorFieldId), "tip_private public creatorId");
-  assertIncludesLiteral(publicInputs, input.creatorAddress, "tip_private public creatorAddress");
-  assertIncludesLiteral(publicInputs, toU64Literal(input.amountMicrocredits), "tip_private public amount");
+  const publicInputs = publicInputsFromTransition(legacyTransition);
+  assertIncludesLiteral(publicInputs, toFieldLiteral(input.creatorFieldId), `${legacyTransition.function} public creatorId`);
+  assertIncludesLiteral(publicInputs, input.creatorAddress, `${legacyTransition.function} public creatorAddress`);
+  assertIncludesLiteral(publicInputs, toU64Literal(input.amountMicrocredits), `${legacyTransition.function} public amount`);
 
   return {
-    walletHash: subjectHash(`${env.tipProgramId}:tip_private:${input.txId}`),
+    walletHash: subjectHash(`${env.tipProgramId}:${legacyTransition.function}:${input.txId}`),
     resourceFieldId: input.creatorFieldId,
     provedByTxId: input.txId,
   };

@@ -7,7 +7,7 @@ const DEFAULT_EXECUTION_FEE_ALEO = 0.25;
 const ALEO_EXPLORER_API =
   process.env.NEXT_PUBLIC_ALEO_EXPLORER_API?.trim() || "https://api.explorer.provable.com/v1";
 const ALEO_EXPLORER_NETWORK = "testnet";
-const TIP_PROGRAM_ID = process.env.NEXT_PUBLIC_TIP_PROGRAM_ID?.trim() || "tip_pay_v4_xwnxp.aleo";
+const TIP_PROGRAM_ID = process.env.NEXT_PUBLIC_TIP_PROGRAM_ID?.trim() || "tip_pay_v5_xwnxp.aleo";
 const PAYMENT_PROOF_PROGRAM_ID =
   process.env.NEXT_PUBLIC_PAYMENT_PROOF_PROGRAM_ID?.trim() || "sub_invoice_v8_xwnxp.aleo";
 const SUBSCRIPTION_PROGRAM_ID =
@@ -396,6 +396,40 @@ const parsePrivateCreditsBalance = (
   return undefined;
 };
 
+const findNestedString = (
+  value: unknown,
+  predicate: (candidate: string) => boolean,
+  depth = 0,
+): string | undefined => {
+  if (depth > 8 || value === null || value === undefined) return undefined;
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed && predicate(trimmed) ? trimmed : undefined;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findNestedString(item, predicate, depth + 1);
+      if (found) return found;
+    }
+    return undefined;
+  }
+
+  if (typeof value === "object") {
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+      const found = findNestedString(nested, predicate, depth + 1);
+      if (found) return found;
+    }
+  }
+
+  return undefined;
+};
+
+const looksLikeRecordLiteral = (value: string): boolean =>
+  /\{\s*owner:\s*aleo1/i.test(value) ||
+  /owner:\s*aleo1/i.test(value);
+
 const extractRecordLiteral = (record: unknown): string | undefined => {
   if (typeof record === "string") {
     return record.trim();
@@ -406,22 +440,161 @@ const extractRecordLiteral = (record: unknown): string | undefined => {
   }
 
   const obj = record as Record<string, unknown>;
-  const candidates = [
-    obj.record,
-    obj.plaintext,
-    obj.value,
-    obj.data,
-    obj.recordString,
-    obj.plaintextRecord,
+  const preferredKeys = [
+    "plaintext",
+    "recordPlaintext",
+    "plaintextRecord",
+    "record",
+    "value",
+    "data",
+    "recordString",
+    "ciphertext",
   ];
 
-  for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.trim().length > 0) {
-      return candidate.trim();
+  for (const key of preferredKeys) {
+    if (!(key in obj)) continue;
+    const found = findNestedString(obj[key], looksLikeRecordLiteral, 1);
+    if (found) return found;
+  }
+
+  return findNestedString(record, looksLikeRecordLiteral, 1);
+};
+
+const normalizeAleoLiteral = (value: string): string =>
+  value.trim().replace(/\.(private|public)$/i, "").replace(/_/g, "");
+
+const parseFieldLiteralValue = (value: string): string | undefined => {
+  const match = /^([0-9]+)field$/i.exec(normalizeAleoLiteral(value));
+  return match ? match[1] : undefined;
+};
+
+const parseU64LiteralValue = (value: string): bigint | undefined => {
+  const match = /^([0-9]+)u64$/i.exec(normalizeAleoLiteral(value));
+  return match ? BigInt(match[1]) : undefined;
+};
+
+const isRecordSpent = (record: unknown): boolean => {
+  if (!record || typeof record !== "object") return false;
+  const value = record as Record<string, unknown>;
+
+  const direct = value.spent;
+  if (typeof direct === "boolean") return direct;
+  if (typeof direct === "string") return direct.trim().toLowerCase() === "true";
+
+  const nestedStatus = value.status;
+  if (typeof nestedStatus === "string" && /spent/i.test(nestedStatus)) return true;
+
+  return false;
+};
+
+const fetchProgramRecords = async (
+  wallet: WalletContextState,
+  programId: string,
+): Promise<unknown[]> => {
+  if (typeof wallet.requestProgramRecords === "function") {
+    const records = await wallet.requestProgramRecords(programId, true);
+    return Array.isArray(records) ? records : [];
+  }
+
+  if (typeof wallet.requestRecordPlaintexts === "function") {
+    const records = await wallet.requestRecordPlaintexts(programId);
+    return Array.isArray(records) ? records : [];
+  }
+
+  throw new Error("Wallet does not support fetching private tip receipts.");
+};
+
+const parseTipReceiptCreatorId = (
+  record: unknown,
+  literal?: string,
+): string | undefined => {
+  if (typeof literal === "string") {
+    const match = literal.match(/creator_id:\s*([0-9_]+field(?:\.(?:private|public))?)/i);
+    if (match?.[1]) {
+      return parseFieldLiteralValue(match[1]);
     }
   }
 
+  const nested = findNestedFieldValue(record, "creator_id");
+  if (typeof nested === "string") {
+    return parseFieldLiteralValue(nested);
+  }
+  if (typeof nested === "number" && Number.isInteger(nested) && nested >= 0) {
+    return String(nested);
+  }
+  if (typeof nested === "bigint" && nested >= 0n) {
+    return nested.toString();
+  }
+
   return undefined;
+};
+
+const parseTipReceiptAmount = (
+  record: unknown,
+  literal?: string,
+): bigint | undefined => {
+  if (typeof literal === "string") {
+    const match = literal.match(/amount:\s*([0-9_]+u64(?:\.(?:private|public))?)/i);
+    if (match?.[1]) {
+      return parseU64LiteralValue(match[1]);
+    }
+  }
+
+  const nested = findNestedFieldValue(record, "amount");
+  if (typeof nested === "string") {
+    return parseU64LiteralValue(nested) ?? parseMicrocreditsValue(nested);
+  }
+  if (typeof nested === "number" || typeof nested === "bigint") {
+    return parseMicrocreditsValue(nested);
+  }
+
+  return undefined;
+};
+
+const recoverTipReceiptRecord = async (
+  wallet: WalletContextState,
+  tipProgramId: string,
+  creatorFieldId: string,
+  amountMicrocredits: bigint,
+  options?: { attempts?: number; delayMs?: number },
+): Promise<{ literal: string; index?: number }> => {
+  const attempts = options?.attempts ?? 45;
+  const delayMs = options?.delayMs ?? 2_000;
+  const normalizedCreatorFieldId = creatorFieldId.trim().replace(/field$/i, "");
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const records = await fetchProgramRecords(wallet, tipProgramId);
+
+    for (let index = records.length - 1; index >= 0; index -= 1) {
+      const record = records[index];
+      if (isRecordSpent(record)) {
+        continue;
+      }
+
+      const literal = extractRecordLiteral(record);
+      if (!literal) {
+        continue;
+      }
+
+      const recordCreatorId = parseTipReceiptCreatorId(record, literal);
+      const recordAmount = parseTipReceiptAmount(record, literal);
+      if (
+        recordCreatorId === normalizedCreatorFieldId &&
+        typeof recordAmount === "bigint" &&
+        recordAmount === amountMicrocredits
+      ) {
+        return { literal, index };
+      }
+    }
+
+    if (attempt < attempts - 1) {
+      await wait(delayMs);
+    }
+  }
+
+  throw new Error(
+    "Tip payment succeeded on-chain, but the wallet has not exposed the private TipReceipt yet. Wait for wallet sync, then retry verification without sending a second tip.",
+  );
 };
 
 const pickPrivateCreditsRecord = async (
@@ -2485,10 +2658,50 @@ export const executeAnonymousTip = async ({
   return executeProgramTransaction({
     wallet,
     programId: tipProgramId,
-    functionName: "tip_private",
+    functionName: "tip_private_v3",
     inputs,
     feeAleo,
     feePreference,
     recordIndices: typeof record.index === "number" ? [record.index] : undefined,
+  });
+};
+
+interface ProveAnonymousTipInput {
+  wallet: WalletContextState;
+  creatorFieldId: string;
+  amountMicrocredits: string | number | bigint;
+  feeAleo?: number;
+  feePreference?: FeePreference;
+  tipProgramId?: string;
+}
+
+export const proveAnonymousTipReceipt = async ({
+  wallet,
+  creatorFieldId,
+  amountMicrocredits,
+  feeAleo = EXECUTION_FEE_ALEO,
+  feePreference = "auto",
+  tipProgramId = TIP_PROGRAM_ID,
+}: ProveAnonymousTipInput): Promise<string> => {
+  const amountLiteral = toU64Literal(amountMicrocredits);
+  const amountValue = BigInt(amountLiteral.replace(/u64$/i, ""));
+  if (amountValue <= 0n) {
+    throw new Error("Tip amount must be greater than zero.");
+  }
+
+  const receipt = await recoverTipReceiptRecord(wallet, tipProgramId, creatorFieldId, amountValue);
+
+  return executeProgramTransaction({
+    wallet,
+    programId: tipProgramId,
+    functionName: "prove_tip_v2",
+    inputs: [
+      receipt.literal,
+      toFieldLiteral(creatorFieldId),
+      amountLiteral,
+    ],
+    feeAleo,
+    feePreference,
+    recordIndices: typeof receipt.index === "number" ? [receipt.index] : undefined,
   });
 };

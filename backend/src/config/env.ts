@@ -51,7 +51,7 @@ const envSchema = z.object({
   PPV_PROGRAM_ID: z.string().default("ppv_pay_v5_xwnxp.aleo"),
   CREATOR_REGISTRY_PROGRAM_ID: z.string().default("creator_reg_v5_xwnxp.aleo"),
   ACCESS_PASS_PROGRAM_ID: z.string().default("access_pass_v4_xwnxp.aleo"),
-  TIP_PROGRAM_ID: z.string().default("tip_pay_v4_xwnxp.aleo"),
+  TIP_PROGRAM_ID: z.string().default("tip_pay_v5_xwnxp.aleo"),
   MASTER_KEY_BASE64: z.string().min(10),
 
   CONTENT_CHUNK_SIZE_BYTES: z.coerce.number().int().positive().default(1_048_576),

@@ -308,10 +308,13 @@ export default function CreatorProfilePage() {
                                 checked={form.acceptedPaymentAssets.includes("USDCX")}
                                 onChange={() => toggleAsset("USDCX")}
                             />
-                            <span className="t-sm">USDCx</span>
+                            <span className="t-sm">USDCx (USDC stablecoin on Aleo)</span>
                         </label>
                     </div>
-                    <span className="form-hint">USDCx selection is saved now. Settlement still requires a USDCx-compatible subscription program deployment.</span>
+                    <span className="form-hint">
+                        Enable USDCx to let subscribers pay with privacy-preserving stablecoins. Both Aleo credits and
+                        USDCx use the same contract for settlement.
+                    </span>
                 </div>
                 <div className="form-group">
                     <label className="form-label">Accepted payment visibility</label>

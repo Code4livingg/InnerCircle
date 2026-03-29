@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import Link from "next/link";
 import { use, useEffect, useMemo, useState, useRef } from "react";
@@ -47,6 +47,7 @@ import {
   executeCreditsTransfer,
   executeAnonymousTip,
   fetchLatestBlockHeight,
+  proveAnonymousTipReceipt,
   type FeePreference,
   waitForOnChainTransactionId,
 } from "../../../lib/aleoTransactions";
@@ -60,7 +61,7 @@ type SubscribeState = "idle" | "wallet" | "verifying" | "success";
 type SubscriptionProgressStep = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
 const CREDITS_PROGRAM_ID = "credits.aleo";
-const TIP_PROGRAM_ID = process.env.NEXT_PUBLIC_TIP_PROGRAM_ID?.trim() || "tip_pay_v4_xwnxp.aleo";
+const TIP_PROGRAM_ID = process.env.NEXT_PUBLIC_TIP_PROGRAM_ID?.trim() || "tip_pay_v5_xwnxp.aleo";
 
 const wait = (ms: number): Promise<void> =>
   new Promise((resolve) => {
@@ -155,12 +156,20 @@ const formatCredits = (microcredits: string | null): string => {
   return `${(value / 1_000_000).toFixed(2)} credits / month`;
 };
 
-const formatTierCredits = (microcredits: string | null): string => {
+const formatUsdcxPrice = (microcredits: string | null): string => {
+  const value = Number(microcredits ?? "0");
+  return `$${(value / 1_000_000).toFixed(2)} USDCx / month`;
+};
+
+const formatTierCredits = (
+  microcredits: string | null,
+  paymentAsset: SubscriptionPaymentAsset = "ALEO_CREDITS",
+): string => {
   const value = Number(microcredits ?? "0");
   if (!Number.isFinite(value) || value <= 0) {
     return "Free access";
   }
-  return `${(value / 1_000_000).toFixed(2)} credits / month`;
+  return paymentAsset === "USDCX" ? formatUsdcxPrice(microcredits) : formatCredits(microcredits);
 };
 
 const estimateIsoFromExpiryBlock = async (expiresAtBlock: number): Promise<string> => {
@@ -957,7 +966,18 @@ export default function CreatorPage({ params }: CreatorPageProps) {
           amountMicrocredits: microcredits,
         });
 
-        const chainTxId = await waitForOnChainTransactionId(wallet, requestTxId, TIP_PROGRAM_ID, {
+        await waitForOnChainTransactionId(wallet, requestTxId, TIP_PROGRAM_ID, {
+          attempts: 60,
+          delayMs: 2000,
+        });
+
+        const proveRequestTxId = await proveAnonymousTipReceipt({
+          wallet,
+          creatorFieldId: creator.creatorFieldId,
+          amountMicrocredits: microcredits,
+        });
+
+        const proofTxId = await waitForOnChainTransactionId(wallet, proveRequestTxId, TIP_PROGRAM_ID, {
           attempts: 60,
           delayMs: 2000,
         });
@@ -968,7 +988,7 @@ export default function CreatorPage({ params }: CreatorPageProps) {
               creatorHandle: creator.handle,
               amountMicrocredits: microcredits,
               message: tipMessage || undefined,
-              txId: chainTxId,
+              txId: proofTxId,
             }),
           );
           setTipSuccess("Anonymous tip sent successfully.");
@@ -1079,7 +1099,9 @@ export default function CreatorPage({ params }: CreatorPageProps) {
   const activeTierPrice = activeTier ? Number(activeTier.priceMicrocredits) : 0;
   const displayedPriceMicrocredits =
     selectedTier?.priceMicrocredits ?? creator.subscriptionPriceMicrocredits ?? "0";
-  const subscriptionLabel = formatCredits(displayedPriceMicrocredits);
+  const subscriptionLabel = selectedPaymentAsset === "USDCX"
+    ? formatUsdcxPrice(displayedPriceMicrocredits)
+    : formatCredits(displayedPriceMicrocredits);
   const activeUntilLabel = subscriptionActiveUntil
     ? new Date(subscriptionActiveUntil).toLocaleString()
     : null;
@@ -1108,6 +1130,9 @@ export default function CreatorPage({ params }: CreatorPageProps) {
     subscriptionSpendability?.publicBalanceMicrocredits != null
       ? formatMicrocreditsAsCredits(BigInt(subscriptionSpendability.publicBalanceMicrocredits))
       : null;
+  const subscriptionButtonLabel = selectedPaymentAsset === "USDCX"
+    ? `Subscribe with USDCx (${formatUsdcxPrice(displayedPriceMicrocredits).replace(" / month", "")})`
+    : `Subscribe (${subscriptionLabel})`;
   const subscriptionSteps = buildSubscriptionSteps(subscriptionProgressStep);
 
   return (
@@ -1169,7 +1194,7 @@ export default function CreatorPage({ params }: CreatorPageProps) {
                     <span className="tier-card__icon tier-card__icon--inner">IC</span>
                     <div className="tier-card__meta">
                       <span className="tier-card__name">Standard</span>
-                      <span className="tier-card__price">{formatTierCredits(displayedPriceMicrocredits)}</span>
+                      <span className="tier-card__price">{formatTierCredits(displayedPriceMicrocredits, selectedPaymentAsset)}</span>
                     </div>
                   </div>
                   <div className="tier-card__perks">
@@ -1194,7 +1219,7 @@ export default function CreatorPage({ params }: CreatorPageProps) {
                         <span className="tier-card__icon tier-card__icon--inner">{tier.tierName.slice(0, 2).toUpperCase()}</span>
                         <div className="tier-card__meta">
                           <span className="tier-card__name">{tier.tierName}</span>
-                          <span className="tier-card__price">{formatTierCredits(tier.priceMicrocredits)}</span>
+                          <span className="tier-card__price">{formatTierCredits(tier.priceMicrocredits, selectedPaymentAsset)}</span>
                         </div>
                       </div>
                       {tier.description ? <p className="t-xs t-dim">{tier.description}</p> : null}
@@ -1251,17 +1276,17 @@ export default function CreatorPage({ params }: CreatorPageProps) {
         </div>
 
         <div className="stack stack-3">
-          <div className="card card--panel">
+          <div className="card card--panel membership-panel">
             <div
               className="row between"
-              style={{ cursor: "pointer", userSelect: "none" }}
+              style={{ cursor: "pointer", userSelect: "none", padding: "0 0 var(--s2)", borderBottom: "1px solid var(--c-border)" }}
               onClick={() => setShowMembership((v) => !v)}
             >
               <p className="dashboard__panel-title" style={{ marginBottom: 0 }}>Membership</p>
               <span
                 className="t-dim"
                 style={{
-                  fontSize: "1.25rem",
+                  fontSize: "1rem",
                   transition: "transform 0.25s",
                   transform: showMembership ? "rotate(180deg)" : "rotate(0deg)",
                 }}
@@ -1272,46 +1297,35 @@ export default function CreatorPage({ params }: CreatorPageProps) {
 
             {showMembership && (
               <>
-                <div className="stack stack-1" style={{ marginTop: "var(--s2)", marginBottom: "var(--s3)" }}>
-                  <span className="t-xs t-dim">Subscription price</span>
-                  <span className="t-lg" style={{ fontFamily: "var(--font-sans)", fontWeight: 600, letterSpacing: "-0.02em", color }}>
-                    {subscriptionLabel}
-                  </span>
-                  {selectedTier ? (
-                    <span className="t-xs t-dim">Selected tier: {selectedTier.tierName}</span>
-                  ) : null}
-                  {hasSubscription && subscriptionTierName ? (
-                    <span className="t-xs t-dim">Active tier: {subscriptionTierName}</span>
-                  ) : null}
-                  <span className="t-xs t-dim">Private subscription invoice minted via {process.env.NEXT_PUBLIC_PAYMENT_PROOF_PROGRAM_ID?.trim() || "sub_invoice_v8_xwnxp.aleo"}</span>
-                </div>
-                <p className="t-sm t-muted" style={{ marginBottom: "var(--s3)" }}>
-                  A private Aleo invoice is minted to your wallet at payment time, then proved locally for access
-                  without sending the private invoice record to the backend.
-                </p>
-                <p className="t-xs t-dim" style={{ marginBottom: "var(--s3)" }}>
-                  Public balance payment is the default route for reliable proving. Private payment remains available as an advanced path when a single record is large enough.
-                </p>
-                <div className="row row-2" style={{ flexWrap: "wrap", marginBottom: "var(--s3)" }}>
-                  <span className="badge badge--secure">ZK Invoice</span>
-                  <span className="badge badge--secure">Local ZK Proof</span>
-                  <span className="badge badge--locked">Wallet Hidden From Creator</span>
+                {/* Price + Status Row */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "var(--s2) 0" }}>
+                  <div>
+                    <span className="t-lg" style={{ fontFamily: "var(--font-sans)", fontWeight: 700, letterSpacing: "-0.02em", color }}>
+                      {subscriptionLabel}
+                    </span>
+                    {selectedTier ? (
+                      <span className="t-xs t-dim" style={{ display: "block", marginTop: "2px" }}>{selectedTier.tierName} tier</span>
+                    ) : null}
+                  </div>
+                  <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    <span className="badge badge--secure" style={{ fontSize: "0.6rem", padding: "2px 8px" }}>ZK Invoice</span>
+                    <span className="badge badge--secure" style={{ fontSize: "0.6rem", padding: "2px 8px" }}>Private</span>
+                  </div>
                 </div>
 
+                {/* Short explainer */}
+                <p className="t-xs t-dim" style={{ lineHeight: "1.55", marginBottom: "var(--s3)", opacity: 0.7 }}>
+                  Subscription is secured via a private Aleo invoice with local ZK proof — your wallet stays hidden from the creator.
+                </p>
+
                 {!hasSubscription ? (
-                  <div
-                    style={{
-                      marginBottom: "var(--s3)",
-                      padding: "var(--s3)",
-                      borderRadius: "var(--r3)",
-                      border: "1px solid rgba(255,255,255,0.08)",
-                      background: "rgba(255,255,255,0.02)",
-                    }}
-                  >
-                    <div className="stack stack-2">
-                      <div className="form-group">
-                        <label className="form-label">Payment asset</label>
-                        <div className="row row-2" style={{ flexWrap: "wrap" }}>
+                  <>
+                    {/* Payment Options — compact two-row layout */}
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--s2)", marginBottom: "var(--s3)" }}>
+                      {/* Payment Asset */}
+                      <div>
+                        <span className="sidebar-section-label" style={{ marginBottom: "6px" }}>Asset</span>
+                        <div className="payment-option-group">
                           {acceptedPaymentAssets.map((asset) => (
                             <button
                               type="button"
@@ -1319,20 +1333,15 @@ export default function CreatorPage({ params }: CreatorPageProps) {
                               className={`btn ${selectedPaymentAsset === asset ? "btn--primary" : "btn--ghost"}`}
                               onClick={() => setSelectedPaymentAsset(asset as SubscriptionPaymentAsset)}
                             >
-                              {asset === "ALEO_CREDITS" ? "Aleo credits" : "USDCx"}
+                              {asset === "ALEO_CREDITS" ? "Credits" : "USDCx"}
                             </button>
                           ))}
                         </div>
-                        {selectedPaymentAsset === "USDCX" ? (
-                          <p className="t-xs t-dim" style={{ marginTop: "var(--s1)" }}>
-                            USDCx private checkout fetches a fresh token record for each attempt before building the transaction.
-                          </p>
-                        ) : null}
                       </div>
-
-                      <div className="form-group">
-                        <label className="form-label">Payment route</label>
-                        <div className="row row-2" style={{ flexWrap: "wrap" }}>
+                      {/* Payment Route */}
+                      <div>
+                        <span className="sidebar-section-label" style={{ marginBottom: "6px" }}>Route</span>
+                        <div className="payment-option-group">
                           {acceptedPaymentVisibilities.map((visibility) => (
                             <button
                               type="button"
@@ -1346,61 +1355,47 @@ export default function CreatorPage({ params }: CreatorPageProps) {
                         </div>
                       </div>
                     </div>
-                  </div>
-                ) : null}
 
-                {!hasSubscription && connected ? (
-                  <div
-                    style={{
-                      marginBottom: "var(--s3)",
-                      padding: "var(--s3)",
-                      borderRadius: "var(--r3)",
-                      border: "1px solid rgba(255,255,255,0.08)",
-                      background: "rgba(255,255,255,0.02)",
-                    }}
-                  >
-                    <p className="t-xs t-dim" style={{ marginBottom: "var(--s2)", letterSpacing: "0.08em", textTransform: "uppercase" }}>
-                      Balance Route Check
-                    </p>
-                    {spendabilityLoading ? (
-                      <p className="t-xs t-dim">Scanning wallet balances...</p>
-                    ) : subscriptionSpendability ? (
-                      <div className="stack stack-1">
-                        {spendabilityRouteLabel ? (
-                          <span className="badge badge--secure" style={{ width: "fit-content" }}>
-                            {spendabilityRouteLabel}
-                          </span>
-                        ) : null}
+                    {/* USDCx note — only when selected */}
+                    {selectedPaymentAsset === "USDCX" ? (
+                      <div className="usdcx-info" style={{ marginBottom: "var(--s3)" }}>
+                        <p>USDCx Stablecoin</p>
                         <p className="t-xs t-dim">
-                          Private total: {totalPrivateCreditsLabel ?? "0"} credits across {subscriptionSpendability.totalPrivateRecordCount} records.
+                          Privacy-preserving USDC on Aleo.{" "}
+                          <a
+                            href="https://usdcx.aleo.dev/"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ color: "rgba(0, 200, 83, 0.9)", textDecoration: "underline" }}
+                          >
+                            Mint testnet USDCx →
+                          </a>
                         </p>
-                        <p className="t-xs t-dim">
-                          Largest private record: {largestPrivateRecordLabel ?? "0"} credits.
-                        </p>
-                        <p className="t-xs t-dim">
-                          Public balance: {publicBalanceLabel ?? "Unavailable"} credits.
-                        </p>
-                        <p className="t-xs t-dim">
-                          Default route: public balance payment for reliable proving. Private payment is advanced-only and still uses a public fee.
-                        </p>
-                        <p className="t-xs t-dim">
-                          {subscriptionSpendability.summary}
-                        </p>
-                        {subscriptionSpendability.canUsePrivateRecord ? (
-                          <p className="t-xs t-dim">
-                            Advanced private mode is available because one private record can cover the subscription amount.
-                          </p>
-                        ) : null}
                       </div>
-                    ) : (
-                      <p className="t-xs t-dim">Connect a fan wallet to inspect subscription spendability.</p>
+                    ) : null}
+
+                    {/* Balance check — only when wallet connected */}
+                    {connected && (
+                      <div style={{ marginBottom: "var(--s3)", padding: "var(--s2)", borderRadius: "var(--r-md)", background: "rgba(255,255,255,0.02)", border: "1px solid var(--c-border)" }}>
+                        <span className="t-xs t-dim" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                          <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "var(--c-success)", display: "inline-block" }} />
+                          {selectedPaymentAsset === "USDCX"
+                            ? "Requires private USDCx token record"
+                            : spendabilityLoading
+                              ? "Scanning wallet..."
+                              : subscriptionSpendability
+                                ? `${publicBalanceLabel ?? "0"} public · ${totalPrivateCreditsLabel ?? "0"} private`
+                                : "Wallet connected"
+                          }
+                        </span>
+                      </div>
                     )}
-                  </div>
+                  </>
                 ) : null}
 
                 <button
                   type="button"
-                  className="btn btn--primary"
+                  className={`btn btn--primary btn--subscribe${hasSubscription ? " btn--subscribed" : ""}`}
                   onClick={onSubscribe}
                   disabled={
                     subscribeState === "wallet" ||
@@ -1408,12 +1403,11 @@ export default function CreatorPage({ params }: CreatorPageProps) {
                     walletRole === "creator" ||
                     hasSubscription
                   }
-                  style={{ width: "100%" }}
                 >
                   {walletRole === "creator"
                     ? "Creator wallet locked"
                     : hasSubscription
-                      ? "Subscription Active"
+                      ? "✓ Subscribed"
                       : subscribeState === "wallet"
                         ? subscribeRoute === "public_balance"
                           ? "Minting via public balance..."
@@ -1423,8 +1417,8 @@ export default function CreatorPage({ params }: CreatorPageProps) {
                         : subscribeState === "verifying"
                           ? "Registering invoice proof..."
                         : subscribeState === "success"
-                            ? "Subscription Active"
-                            : "Mint ZK Invoice"}
+                            ? "✓ Subscribed"
+                            : subscriptionButtonLabel}
                 </button>
 
                 {subscribeTxId ? (
@@ -1452,16 +1446,7 @@ export default function CreatorPage({ params }: CreatorPageProps) {
                 ) : null}
 
                 {subscriptionProgressStep > 0 ? (
-                  <div
-                    className="stack stack-1"
-                    style={{
-                      marginTop: "var(--s2)",
-                      padding: "var(--s2)",
-                      borderRadius: "var(--r3)",
-                      border: "1px solid rgba(255,255,255,0.08)",
-                      background: "rgba(255,255,255,0.02)",
-                    }}
-                  >
+                  <div className="subscription-steps">
                     {subscriptionSteps.map((step) => (
                       <div key={step.id} className="row" style={{ justifyContent: "space-between", gap: "var(--s2)" }}>
                         <span className="t-xs">{step.label}</span>
@@ -1508,11 +1493,11 @@ export default function CreatorPage({ params }: CreatorPageProps) {
             )}
           </div>
 
-          <div className="card card--panel">
-            <p className="dashboard__panel-title" style={{ marginBottom: "var(--s2)" }}>Tip the creator</p>
-            <div className="stack stack-2">
+          <div className="card card--panel tip-panel">
+            <p className="dashboard__panel-title" style={{ marginBottom: "var(--s3)" }}>💰 Tip the Creator</p>
+            <div className="stack stack-3">
               <div className="form-group">
-                <label className="form-label">Amount (credits)</label>
+                <span className="sidebar-section-label">Amount (credits)</span>
                 <input
                   className="form-input"
                   type="number"
@@ -1524,7 +1509,7 @@ export default function CreatorPage({ params }: CreatorPageProps) {
                 />
               </div>
               <div className="form-group">
-                <label className="form-label">Message (optional)</label>
+                <span className="sidebar-section-label">Message (optional)</span>
                 <textarea
                   className="form-textarea"
                   placeholder="Share a note with the creator"
@@ -1532,35 +1517,38 @@ export default function CreatorPage({ params }: CreatorPageProps) {
                   onChange={(e) => setTipMessage(e.target.value)}
                 />
               </div>
-              <label className="row row-2" style={{ alignItems: "center" }}>
+              <label className="anon-check">
                 <input
                   type="checkbox"
                   checked={tipAnonymous}
                   onChange={(e) => setTipAnonymous(e.target.checked)}
                 />
-                <span className="t-xs t-dim">Tip anonymously</span>
+                <span className="t-xs t-dim">Send tip anonymously</span>
               </label>
               <button
                 type="button"
-                className="btn btn--primary"
+                className="btn btn--primary btn--tip"
                 onClick={onTip}
                 disabled={tipLoading}
               >
-                {tipLoading ? "Sending tip..." : "Send tip"}
+                {tipLoading ? "Sending tip..." : "Send Tip"}
               </button>
               {tipError ? <p className="t-sm t-error">{tipError}</p> : null}
               {tipSuccess ? <p className="t-sm t-success">{tipSuccess}</p> : null}
             </div>
 
-            <div className="stack stack-1" style={{ marginTop: "var(--s3)" }}>
-              <span className="t-xs t-dim">Top supporters</span>
+            <div className="supporters-section">
+              <span className="sidebar-section-label">Top Supporters</span>
               {leaderboard.length === 0 ? (
-                <p className="t-xs t-dim">No tips yet.</p>
+                <p className="t-xs t-dim">No tips yet — be the first!</p>
               ) : (
                 <div className="stack stack-1">
-                  {leaderboard.slice(0, 5).map((supporter) => (
-                    <div key={supporter.supporter} className="row" style={{ justifyContent: "space-between" }}>
-                      <span className="t-xs">{anonLabelFromSeed(supporter.supporter)}</span>
+                  {leaderboard.slice(0, 5).map((supporter, index) => (
+                    <div key={supporter.supporter} className="supporter-row">
+                      <span className="row" style={{ gap: "8px" }}>
+                        <span className="supporter-rank">{index + 1}</span>
+                        <span className="t-xs">{anonLabelFromSeed(supporter.supporter)}</span>
+                      </span>
                       <span className="t-xs t-dim">
                         {(Number(supporter.totalMicrocredits) / 1_000_000).toFixed(2)} credits
                       </span>

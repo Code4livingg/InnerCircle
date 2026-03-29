@@ -13,6 +13,7 @@ const NAV_LINKS = [
     { href: "/library", label: "Library" },
     { href: "/activity", label: "Activity" },
     { href: "/membership", label: "Membership" },
+    { href: "/docs", label: "Docs" },
 ];
 
 export function Navbar() {
@@ -189,6 +190,9 @@ export function Navbar() {
                                     )}
                                     <Link href={role === "creator" ? "/creator-studio/profile" : "/settings"} className="nb__dropdown-item">
                                         <span>👤</span> Profile
+                                    </Link>
+                                    <Link href="/docs" className="nb__dropdown-item">
+                                        <span>📖</span> Docs
                                     </Link>
                                     <Link href="/settings" className="nb__dropdown-item">
                                         <span>⚙️</span> Settings
