@@ -498,8 +498,33 @@ export default function ContentPage({ params }: ContentPageProps) {
       const walletAddressHint = address ?? receipt.owner;
       try {
         setProofProgressLabel("Generating local ZK proof...");
-        const { proof: subscriptionProof } = await generateSubscriptionProof(wallet, receipt, circleId);
-        setProofTxId(receipt.nullifier);
+        const { proof: subscriptionProof, transactionId: verifyTransactionId } = await generateSubscriptionProof(
+          wallet,
+          receipt,
+          circleId,
+          {
+            onStatus: (status, transactionId) => {
+              if (transactionId) {
+                setProofTxId(transactionId);
+              }
+
+              switch (status) {
+                case "accepted":
+                  setProofProgressLabel("Transaction submitted. Waiting for on-chain finalization...");
+                  break;
+                case "waiting_finality":
+                  setProofProgressLabel("Waiting for on-chain finalization...");
+                  break;
+                case "fetching_proof":
+                  setProofProgressLabel("Fetching execution proof from wallet...");
+                  break;
+                default:
+                  break;
+              }
+            },
+          },
+        );
+        setProofTxId(verifyTransactionId);
         setProofProgressLabel("Syncing subscription with backend...");
         const syncedSubscription = await runWithPendingRetry(() =>
           createSubscription(
@@ -777,7 +802,7 @@ export default function ContentPage({ params }: ContentPageProps) {
 
           {proofTxId ? (
             <p className="t-xs t-dim" style={{ marginTop: "var(--s2)", wordBreak: "break-all" }}>
-              Private invoice proof ready for unlock.
+              verify tx: {proofTxId}
             </p>
           ) : null}
 

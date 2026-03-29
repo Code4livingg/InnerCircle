@@ -15,6 +15,7 @@ import type { FeePreference } from "@/lib/aleoTransactions";
 const PAYMENT_PROOF_PREFIX = "innercircle_payment_proof_v1:";
 const SUBSCRIPTION_INVOICE_PREFIX = "innercircle_subscription_invoice_v1:";
 const PENDING_SUBSCRIPTION_PREFIX = "innercircle_pending_subscription_v1:";
+const PENDING_SUBSCRIPTION_PROOF_PREFIX = "innercircle_pending_subscription_proof_v1:";
 const PAYMENT_PROOF_PROGRAM_ID =
   process.env.NEXT_PUBLIC_PAYMENT_PROOF_PROGRAM_ID?.trim() || "sub_invoice_v8_xwnxp.aleo";
 const USDCX_PROGRAM_ID =
@@ -107,6 +108,13 @@ interface PendingSubscriptionAttempt {
   transactionId: string;
   route: SubscriptionPaymentRoute;
   purchasedAt: number;
+}
+
+interface PendingSubscriptionProofAttempt {
+  circleId: string;
+  nullifier: string;
+  transactionId: string;
+  submittedAt: number;
 }
 
 interface SubscriptionTxFallbackReceipt {
@@ -1264,6 +1272,9 @@ const getSubscriptionInvoiceMetaStorageKey = (circleId: string): string =>
 const getPendingSubscriptionStorageKey = (circleId: string): string =>
   `${PENDING_SUBSCRIPTION_PREFIX}${normalizeFieldId(circleId)}`;
 
+const getPendingSubscriptionProofStorageKey = (circleId: string): string =>
+  `${PENDING_SUBSCRIPTION_PROOF_PREFIX}${normalizeFieldId(circleId)}`;
+
 const readPendingSubscriptionAttempt = (circleId: string): PendingSubscriptionAttempt | null => {
   const storage = getStorage();
   if (!storage) return null;
@@ -1309,6 +1320,53 @@ const clearPendingSubscriptionAttempt = (circleId: string): void => {
   const storage = getStorage();
   if (!storage) return;
   storage.removeItem(getPendingSubscriptionStorageKey(circleId));
+};
+
+const readPendingSubscriptionProofAttempt = (circleId: string): PendingSubscriptionProofAttempt | null => {
+  const storage = getStorage();
+  if (!storage) return null;
+
+  const raw = storage.getItem(getPendingSubscriptionProofStorageKey(circleId));
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<PendingSubscriptionProofAttempt>;
+    if (
+      typeof parsed.circleId !== "string" ||
+      typeof parsed.nullifier !== "string" ||
+      typeof parsed.transactionId !== "string" ||
+      typeof parsed.submittedAt !== "number"
+    ) {
+      return null;
+    }
+
+    return {
+      circleId: normalizeFieldId(parsed.circleId),
+      nullifier: parsed.nullifier,
+      transactionId: parsed.transactionId,
+      submittedAt: parsed.submittedAt,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const storePendingSubscriptionProofAttempt = (
+  circleId: string,
+  attempt: PendingSubscriptionProofAttempt,
+): void => {
+  const storage = getStorage();
+  if (!storage) return;
+  storage.setItem(getPendingSubscriptionProofStorageKey(circleId), JSON.stringify({
+    ...attempt,
+    circleId: normalizeFieldId(circleId),
+  }));
+};
+
+const clearPendingSubscriptionProofAttempt = (circleId: string): void => {
+  const storage = getStorage();
+  if (!storage) return;
+  storage.removeItem(getPendingSubscriptionProofStorageKey(circleId));
 };
 
 const handleTranscriptFallback = async (
@@ -1444,6 +1502,98 @@ export const generateSubscriptionProof = async (
     );
   }
 
+  const finalizeSubscriptionProofAttempt = async (
+    requestTxId: string,
+    submittedAt: number,
+  ): Promise<{ proof: SubscriptionExecutionProof; transactionId: string }> => {
+    options?.onStatus?.("accepted", requestTxId);
+
+    let chainTxId = requestTxId;
+
+    try {
+      chainTxId = await waitForOnChainTransactionId(wallet, requestTxId, PAYMENT_PROOF_PROGRAM_ID, {
+        attempts: 60,
+        delayMs: 2_000,
+      });
+    } catch (error) {
+      storePendingSubscriptionProofAttempt(normalizedCircleId, {
+        circleId: normalizedCircleId,
+        nullifier: invoice.nullifier,
+        transactionId: requestTxId,
+        submittedAt,
+      });
+
+      const message = (error as Error)?.message ?? "";
+      if (
+        /transaction was submitted, but the on-chain tx id is not available yet|not finalized after/i.test(message)
+      ) {
+        throw new Error(
+          `Verification transaction was already submitted (${requestTxId}). Wait for Aleo finalization, then press unlock again to resume without re-submitting.`,
+        );
+      }
+      throw error;
+    }
+
+    storePendingSubscriptionProofAttempt(normalizedCircleId, {
+      circleId: normalizedCircleId,
+      nullifier: invoice.nullifier,
+      transactionId: chainTxId,
+      submittedAt,
+    });
+
+    options?.onStatus?.("waiting_finality", chainTxId);
+
+    try {
+      console.log("[InnerCircle] Waiting for tx finality...", chainTxId);
+      await waitForTransactionFinality(chainTxId);
+    } catch (error) {
+      const message = (error as Error)?.message ?? "";
+      if (/not finalized after/i.test(message)) {
+        throw new Error(
+          `Verification transaction ${chainTxId} is still finalizing. Press unlock again to resume without re-submitting.`,
+        );
+      }
+      throw error;
+    }
+
+    options?.onStatus?.("fetching_proof", chainTxId);
+    const executionProof = await waitForExecutionTranscript(wallet, chainTxId);
+    clearPendingSubscriptionProofAttempt(normalizedCircleId);
+
+    if (!executionProof) {
+      throw new SubscriptionTranscriptUnavailableError(chainTxId);
+    }
+
+    return {
+      transactionId: chainTxId,
+      proof: {
+        programId: PAYMENT_PROOF_PROGRAM_ID,
+        transitionName: "verify_subscription",
+        publicInputs: {
+          circleId: normalizedCircleId,
+          expiresAt: invoice.expiresAt,
+          tier: invoice.tier,
+        },
+        executionProof,
+      },
+    };
+  };
+
+  const pendingProofAttempt = readPendingSubscriptionProofAttempt(normalizedCircleId);
+  if (
+    pendingProofAttempt &&
+    pendingProofAttempt.nullifier === invoice.nullifier &&
+    Date.now() - pendingProofAttempt.submittedAt <= 15 * 60_000
+  ) {
+    return finalizeSubscriptionProofAttempt(
+      pendingProofAttempt.transactionId,
+      pendingProofAttempt.submittedAt,
+    );
+  }
+  if (pendingProofAttempt) {
+    clearPendingSubscriptionProofAttempt(normalizedCircleId);
+  }
+
   try {
     const requestTxId = await executeProgramTransaction({
       wallet,
@@ -1457,36 +1607,19 @@ export const generateSubscriptionProof = async (
       privateFee: false,
       signerAddress,
     });
-    options?.onStatus?.("accepted", requestTxId);
+    const submittedAt = Date.now();
+    storePendingSubscriptionProofAttempt(normalizedCircleId, {
+      circleId: normalizedCircleId,
+      nullifier: invoice.nullifier,
+      transactionId: requestTxId,
+      submittedAt,
+    });
+
     if (!wallet.address || wallet.address.trim().toLowerCase() !== signerAddress) {
       throw new Error("SIGNER_CHANGED");
     }
-    const chainTxId = await waitForOnChainTransactionId(wallet, requestTxId, PAYMENT_PROOF_PROGRAM_ID, {
-      attempts: 60,
-      delayMs: 2_000,
-    });
-    options?.onStatus?.("waiting_finality", chainTxId);
-    console.log("[InnerCircle] Waiting for tx finality...", chainTxId);
-    await waitForTransactionFinality(chainTxId);
-    options?.onStatus?.("fetching_proof", chainTxId);
-    const executionProof = await waitForExecutionTranscript(wallet, chainTxId);
-    if (!executionProof) {
-      throw new SubscriptionTranscriptUnavailableError(chainTxId);
-    }
 
-    return {
-      transactionId: chainTxId,
-      proof: {
-      programId: PAYMENT_PROOF_PROGRAM_ID,
-      transitionName: "verify_subscription",
-      publicInputs: {
-        circleId: normalizedCircleId,
-        expiresAt: invoice.expiresAt,
-        tier: invoice.tier,
-      },
-      executionProof,
-      },
-    };
+    return finalizeSubscriptionProofAttempt(requestTxId, submittedAt);
   } catch (error) {
     const message = (error as Error)?.message ?? "";
     if (/must belong to the signer/i.test(message)) {
