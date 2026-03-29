@@ -101,10 +101,12 @@ function RecoverProofButton({
   contentId,
   suggestedTxId,
   proofError,
+  onRecovered,
 }: {
   contentId: string;
   suggestedTxId?: string | null;
   proofError?: string | null;
+  onRecovered?: (txId: string, transcript: string | null) => void;
 }) {
   const [show, setShow] = useState(false);
   const [txInput, setTxInput] = useState("");
@@ -175,11 +177,8 @@ function RecoverProofButton({
       }));
 
       setStatus("done");
-      setMessage("Recovery saved. Refreshing...");
-
-      setTimeout(() => {
-        window.location.reload();
-      }, 1500);
+      setMessage("Recovery saved. Press unlock again.");
+      onRecovered?.(txId, transcript);
     } catch (error) {
       setStatus("error");
       setMessage((error as Error)?.message || "Recovery failed. Try again.");
@@ -994,6 +993,16 @@ export default function ContentPage({ params }: ContentPageProps) {
                 contentId={contentId}
                 suggestedTxId={proofTxId}
                 proofError={proofError}
+                onRecovered={(recoveredTxId, transcript) => {
+                  setProofTxId(recoveredTxId);
+                  setProofError(null);
+                  setProofState("idle");
+                  setProofProgressLabel(
+                    transcript
+                      ? "Recovered proof cached. Press unlock again to continue."
+                      : "Recovered transaction saved. Press unlock again to continue.",
+                  );
+                }}
               />
             </div>
           )}
