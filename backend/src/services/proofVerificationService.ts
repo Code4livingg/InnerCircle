@@ -2,7 +2,7 @@ import { env } from "../config/env.js";
 import { sha256Hex } from "../utils/crypto.js";
 import type { ExplorerTransition, ExplorerTransitionIO, ExplorerTx } from "./aleoExplorerService.js";
 import { ExplorerRequestError, extractFeePayerAddress, fetchExplorerTx, isExecuteTx } from "./aleoExplorerService.js";
-import { approximateExpiryDateFromBlockHeights } from "./subscriptionService.js";
+import { approximateExpiryDateFromBlockHeights, tierFromPriceMicrocredits } from "./subscriptionService.js";
 
 export interface SubscriptionProofInput {
   creatorFieldId: string;
@@ -194,6 +194,70 @@ const verifyDirectCreditsTransfer = async ({
   };
 };
 
+const verifyMatchedExecuteTransition = ({
+  tx,
+  txId,
+  transition,
+  expectedFieldId,
+  expectedFieldLabel,
+  expectedPriceMicrocredits,
+  expectedPriceLabel,
+  walletAddressHint,
+  anonymousSubjectId,
+  expectedTier,
+  expectedTierLabel = "tier",
+}: {
+  tx: ExplorerTx;
+  txId: string;
+  transition: ExplorerTransition;
+  expectedFieldId: string;
+  expectedFieldLabel: string;
+  expectedPriceMicrocredits?: bigint;
+  expectedPriceLabel?: string;
+  walletAddressHint?: string;
+  anonymousSubjectId?: string;
+  expectedTier?: number;
+  expectedTierLabel?: string;
+}): { walletHash: string } => {
+  if (!txAppearsAccepted(tx)) {
+    throw new Error(`Transaction ${txId} is not accepted yet`);
+  }
+
+  const expectedField = toFieldLiteral(expectedFieldId);
+  const publicInputs = publicInputsFromTransition(transition);
+  if (!includesLiteral(publicInputs, expectedField)) {
+    throw new Error(`${transition.function} public ${expectedFieldLabel} mismatch`);
+  }
+
+  if (typeof expectedPriceMicrocredits === "bigint") {
+    const priceInputs = publicInputs.filter((value) => normalizeLiteral(value) !== normalizeLiteral(expectedField));
+    if (hasUnsignedIntegerLiteral(priceInputs)) {
+      const expectedPrice = toU64Literal(expectedPriceMicrocredits);
+      if (!includesLiteral(priceInputs, expectedPrice)) {
+        throw new Error(`${transition.function} public ${expectedPriceLabel ?? "amount"} mismatch`);
+      }
+    }
+  }
+
+  if (typeof expectedTier === "number") {
+    const expectedTierLiteral = `${expectedTier}u8`;
+    if (!includesLiteral(publicInputs, expectedTierLiteral)) {
+      throw new Error(`${transition.function} public ${expectedTierLabel} mismatch`);
+    }
+  }
+
+  if (anonymousSubjectId) {
+    return {
+      walletHash: subjectHash(anonymousSubjectId),
+    };
+  }
+
+  const address = extractFeePayerAddress(tx) ?? walletAddressHint;
+  return {
+    walletHash: walletHash(resolveWalletAddress(address)),
+  };
+};
+
 const verifyExecuteTransition = async ({
   txId,
   programId,
@@ -221,36 +285,17 @@ const verifyExecuteTransition = async ({
     throw new Error(`${functionName} transition not found in transaction`);
   }
 
-  if (!txAppearsAccepted(tx)) {
-    throw new Error(`Transaction ${txId} is not accepted yet`);
-  }
-
-  const expectedField = toFieldLiteral(expectedFieldId);
-  const publicInputs = publicInputsFromTransition(transition);
-  if (!includesLiteral(publicInputs, expectedField)) {
-    throw new Error(`${functionName} public ${expectedFieldLabel} mismatch`);
-  }
-
-  if (typeof expectedPriceMicrocredits === "bigint") {
-    const priceInputs = publicInputs.filter((value) => normalizeLiteral(value) !== normalizeLiteral(expectedField));
-    if (hasUnsignedIntegerLiteral(priceInputs)) {
-      const expectedPrice = toU64Literal(expectedPriceMicrocredits);
-      if (!includesLiteral(priceInputs, expectedPrice)) {
-        throw new Error(`${functionName} public ${expectedPriceLabel ?? "amount"} mismatch`);
-      }
-    }
-  }
-
-  if (anonymousSubjectId) {
-    return {
-      walletHash: subjectHash(anonymousSubjectId),
-    };
-  }
-
-  const address = extractFeePayerAddress(tx) ?? walletAddressHint;
-  return {
-    walletHash: walletHash(resolveWalletAddress(address)),
-  };
+  return verifyMatchedExecuteTransition({
+    tx,
+    txId,
+    transition,
+    expectedFieldId,
+    expectedFieldLabel,
+    expectedPriceMicrocredits,
+    expectedPriceLabel,
+    walletAddressHint,
+    anonymousSubjectId,
+  });
 };
 
 const verifyMockOnly = (
@@ -705,36 +750,128 @@ export const verifySubscriptionPayment = async (
     throw new Error("Missing purchaseTxId. Expected an on-chain execute tx calling subscribe.");
   }
 
-  const functionName = resolveAllowedFunctionName(
-    input.functionName,
-    ["pay_and_subscribe", "pay_and_subscribe_v2"],
-    "pay_and_subscribe_v2",
-  );
+  const currentSubscriptionPaymentFunctions = [
+    "pay_and_subscribe",
+    "pay_and_subscribe_public",
+    "pay_and_subscribe_usdcx",
+    "pay_and_subscribe_usdcx_public",
+  ];
+  const legacySubscriptionPaymentFunctions = ["pay_and_subscribe", "pay_and_subscribe_v2"];
+  const supportedSubscriptionFunctions = new Set([
+    ...currentSubscriptionPaymentFunctions,
+    ...legacySubscriptionPaymentFunctions,
+    "verify_subscription",
+  ]);
 
-  let verified: { walletHash: string };
-  try {
-    verified = await verifyExecuteTransition({
+  if (input.functionName && !supportedSubscriptionFunctions.has(input.functionName)) {
+    throw new Error(`Unsupported transition "${input.functionName}"`);
+  }
+
+  const currentCandidates = input.functionName
+    ? currentSubscriptionPaymentFunctions.filter((entry) => entry === input.functionName)
+    : currentSubscriptionPaymentFunctions;
+  const legacyCandidates = input.functionName
+    ? legacySubscriptionPaymentFunctions.filter((entry) => entry === input.functionName)
+    : legacySubscriptionPaymentFunctions;
+  const allowVerifySubscription = !input.functionName || input.functionName === "verify_subscription";
+
+  const tx = await fetchExplorerTx(input.purchaseTxId);
+  if (!isExecuteTx(tx)) {
+    throw new Error(`Expected execute tx, got ${String((tx as { type?: unknown }).type)}`);
+  }
+
+  const currentTransition = tx.execution.transitions.find(
+    (transition) =>
+      transition.program === env.paymentProofProgramId &&
+      currentCandidates.includes(transition.function),
+  );
+  if (currentTransition) {
+    const verified = verifyMatchedExecuteTransition({
+      tx,
       txId: input.purchaseTxId,
-      programId: env.subscriptionProgramId,
-      functionName,
+      transition: currentTransition,
       expectedFieldId: input.creatorFieldId,
       expectedFieldLabel: "creatorId",
       expectedPriceMicrocredits: input.expectedPriceMicrocredits,
       expectedPriceLabel: "subscriptionPriceMicrocredits",
       walletAddressHint: input.walletAddressHint,
     });
-  } catch (error) {
-    if (!input.expectedRecipientAddress) {
-      throw error;
-    }
 
-    verified = await verifyDirectCreditsTransfer({
+    return {
+      walletHash: verified.walletHash,
+      resourceFieldId: input.creatorFieldId,
+      provedByTxId: input.purchaseTxId,
+    };
+  }
+
+  if (allowVerifySubscription) {
+    const verifyTransition = tx.execution.transitions.find(
+      (transition) =>
+        transition.program === env.paymentProofProgramId &&
+        transition.function === "verify_subscription",
+    );
+
+    if (verifyTransition) {
+      const verified = verifyMatchedExecuteTransition({
+        tx,
+        txId: input.purchaseTxId,
+        transition: verifyTransition,
+        expectedFieldId: input.creatorFieldId,
+        expectedFieldLabel: "circleId",
+        walletAddressHint: input.walletAddressHint,
+        expectedTier: typeof input.expectedPriceMicrocredits === "bigint"
+          ? tierFromPriceMicrocredits(input.expectedPriceMicrocredits)
+          : undefined,
+      });
+
+      return {
+        walletHash: verified.walletHash,
+        resourceFieldId: input.creatorFieldId,
+        provedByTxId: input.purchaseTxId,
+      };
+    }
+  }
+
+  const legacyTransition = tx.execution.transitions.find(
+    (transition) =>
+      transition.program === env.subscriptionProgramId &&
+      legacyCandidates.includes(transition.function),
+  );
+  if (legacyTransition) {
+    const verified = verifyMatchedExecuteTransition({
+      tx,
       txId: input.purchaseTxId,
-      expectedRecipientAddress: input.expectedRecipientAddress,
+      transition: legacyTransition,
+      expectedFieldId: input.creatorFieldId,
+      expectedFieldLabel: "creatorId",
       expectedPriceMicrocredits: input.expectedPriceMicrocredits,
+      expectedPriceLabel: "subscriptionPriceMicrocredits",
       walletAddressHint: input.walletAddressHint,
     });
+
+    return {
+      walletHash: verified.walletHash,
+      resourceFieldId: input.creatorFieldId,
+      provedByTxId: input.purchaseTxId,
+    };
   }
+
+  if (!input.expectedRecipientAddress) {
+    const foundTransitions = tx.execution.transitions.map(
+      (transition) => `${transition.program}/${transition.function}`,
+    );
+    throw new Error(
+      `No supported subscription transition found in transaction ${input.purchaseTxId}. ` +
+      `Found transitions: ${foundTransitions.join(", ") || "none"}`,
+    );
+  }
+
+  const verified = await verifyDirectCreditsTransfer({
+    txId: input.purchaseTxId,
+    expectedRecipientAddress: input.expectedRecipientAddress,
+    expectedPriceMicrocredits: input.expectedPriceMicrocredits,
+    walletAddressHint: input.walletAddressHint,
+  });
 
   return {
     walletHash: verified.walletHash,

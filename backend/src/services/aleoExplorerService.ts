@@ -30,6 +30,7 @@ export interface ExplorerExecuteTx {
     global_state_root?: string;
     proof?: string;
   };
+  transitions?: ExplorerTransition[];
 }
 
 export interface ExplorerDeployTx {
@@ -54,13 +55,73 @@ export class ExplorerRequestError extends Error {
   }
 }
 
+const extractNormalizedTransitions = (tx: Record<string, unknown>): ExplorerTransition[] => {
+  const executionTransitions = (tx.execution as { transitions?: unknown } | undefined)?.transitions;
+  if (Array.isArray(executionTransitions)) {
+    return executionTransitions as ExplorerTransition[];
+  }
+
+  const nestedExecutionTransitions =
+    ((tx.transaction as { execution?: { transitions?: unknown } } | undefined)?.execution?.transitions);
+  if (Array.isArray(nestedExecutionTransitions)) {
+    return nestedExecutionTransitions as ExplorerTransition[];
+  }
+
+  const topLevelTransitions = tx.transitions;
+  if (Array.isArray(topLevelTransitions)) {
+    return topLevelTransitions as ExplorerTransition[];
+  }
+
+  const feeTransition = (tx.fee as { transition?: unknown } | undefined)?.transition;
+  if (feeTransition && typeof feeTransition === "object") {
+    return [feeTransition as ExplorerTransition];
+  }
+
+  return [];
+};
+
+const normalizeExplorerTx = (tx: ExplorerTx): ExplorerTx => {
+  const record = tx as ExplorerTx & Record<string, unknown>;
+  const transitions = extractNormalizedTransitions(record);
+
+  if (tx.type === "execute") {
+    const execution = typeof record.execution === "object" && record.execution !== null
+      ? { ...(record.execution as Record<string, unknown>), transitions }
+      : { transitions };
+
+    return {
+      ...tx,
+      execution: execution as ExplorerExecuteTx["execution"],
+      transitions,
+    };
+  }
+
+  return {
+    ...tx,
+    transitions,
+  };
+};
+
 export const isExecuteTx = (tx: ExplorerTx): tx is ExplorerExecuteTx => {
-  return (
-    tx.type === "execute" &&
-    typeof (tx as { execution?: unknown }).execution === "object" &&
-    !!(tx as { execution?: { transitions?: unknown } }).execution?.transitions &&
-    Array.isArray((tx as { execution: { transitions: unknown } }).execution.transitions)
-  );
+  const record = tx as ExplorerTx & Record<string, unknown>;
+  if (tx.type !== "execute") {
+    return false;
+  }
+
+  if (typeof record.execution === "object" && record.execution !== null) {
+    const transitions = (record.execution as { transitions?: unknown }).transitions;
+    if (Array.isArray(transitions)) {
+      return true;
+    }
+  }
+
+  const nestedTransitions =
+    ((record.transaction as { execution?: { transitions?: unknown } } | undefined)?.execution?.transitions);
+  if (Array.isArray(nestedTransitions)) {
+    return true;
+  }
+
+  return Array.isArray(record.transitions);
 };
 
 const txUrl = (txId: string): string => {
@@ -121,7 +182,8 @@ export const fetchExplorerTx = async (txId: string): Promise<ExplorerTx> => {
     throw new ExplorerRequestError(res.status, `Explorer fetch failed (${res.status}): ${body.slice(0, 200)}`);
   }
 
-  return (await res.json()) as ExplorerTx;
+  const rawTx = (await res.json()) as ExplorerTx;
+  return normalizeExplorerTx(rawTx);
 };
 
 export const fetchCreditsPublicBalance = async (walletAddress: string): Promise<bigint> => {
