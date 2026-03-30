@@ -1,156 +1,367 @@
 ﻿# InnerCircle - Privacy-First Creator Platform
 
-InnerCircle is a privacy-first creator platform built on Aleo. It uses zero-knowledge ownership proofs to unlock subscriptions and pay-per-view access without exposing subscriber lists or payment history on-chain. Media stays encrypted off-chain and is streamed through short-lived, wallet-bound sessions.
+Privacy-first creator monetization on Aleo.
 
-## Use Cases
+InnerCircle is a full-stack creator platform for private subscriptions, pay-per-view unlocks, anonymous access sessions, and protected media delivery. It combines Aleo payment proofs with a Next.js client, an Express API, PostgreSQL via Prisma, S3-backed media storage, and optional Amazon IVS livestream infrastructure.
 
-- Private creator subscriptions where ownership is hidden on-chain
-- Pay-per-view access without revealing buyers
-- Privacy-preserving age verification (KYC or ZK credential)
-- Encrypted media delivery with session-based watermarking
+This repository contains the product application, the API, and the Aleo contract workspace used to support the platform.
 
-## Aleo ZK Usage
+## Table Of Contents
 
-- Private records in Aleo programs for subscription and PPV ownership
-- Wallet-generated proofs of ownership instead of public on-chain reads
-- "Prove once, stream many" session flow to avoid repeated proofs
-- Circuits designed to be minimal for lower proving cost
+- [What It Does](#what-it-does)
+- [System Overview](#system-overview)
+- [Repository Layout](#repository-layout)
+- [Technology Stack](#technology-stack)
+- [Getting Started](#getting-started)
+- [Environment Configuration](#environment-configuration)
+- [Available Scripts](#available-scripts)
+- [Production Deployment Notes](#production-deployment-notes)
+- [Security Notes](#security-notes)
+- [Documentation](#documentation)
+- [Current Development Notes](#current-development-notes)
 
-## Key Features
+## What It Does
 
-- Private ownership records for subscriptions and PPV
-- ZK proof-based unlock API
-- Short-lived, wallet-hash-bound access sessions
-- Encrypted storage with signed URLs from a private object store
-- Watermark-ready streaming pipeline
-- Creator registry and price hash registry on-chain
-- Optional age verification models
+InnerCircle supports:
 
-## Architecture Overview
+- Private recurring subscriptions backed by Aleo payment records
+- Pay-per-view content unlocks
+- Anonymous browsing and session issuance
+- Short-lived, session-gated media access
+- Session fingerprinting and watermark-aware playback
+- Creator dashboards, tiers, analytics, and earnings views
+- Tips and fan interaction flows
+- Optional livestream and live comment infrastructure
+- Age-verification and compliance support surfaces
 
-1. Aleo contracts: subscription, PPV, and creator registry programs.
-2. Backend API: proof verification, session issuance, and content access control.
-3. Storage/streaming: encrypted media in a private object store with expiring signed URLs.
-4. Frontend: Next.js app with Aleo wallet adapters and proof flow UI.
+## System Overview
 
-See [docs/ARCHITECTURE.md](C:/Users/ankur/OneDrive/Desktop/OnlyAleo/docs/ARCHITECTURE.md) for detailed flows and diagrams.
+The platform is split into four major layers:
 
-## Project Structure
+1. **Frontend (`frontend/`)**  
+   Next.js 15 application for wallet connection, discovery, creator pages, library, membership flows, private unlocks, creator studio, and livestream playback.
+
+2. **Backend (`backend/`)**  
+   Express API responsible for proof verification, subscription and PPV state, wallet session handling, media authorization, livestream support, analytics, and persistence.
+
+3. **Contracts (`aleo-contracts/`)**  
+   Aleo programs for subscriptions, PPV, creator registry, payment proofs, access control, access passes, and tips.
+
+4. **Data and storage services**  
+   PostgreSQL for application data, S3-compatible object storage for protected media, and optional Amazon IVS for live streaming workflows.
+
+High-level request flow:
+
+- A user connects an Aleo wallet in the frontend
+- The client verifies payment state or generates a local proof
+- The backend validates the request and creates a short-lived access session
+- Media access is issued through backend-controlled routes and signed delivery
+- Protected playback uses session context, watermark identity, and expiry rules
+
+## Repository Layout
 
 ```text
-project-root/
-├── aleo-contracts/
-│   ├── subscription/
-│   ├── ppv/
-│   ├── creator_registry/
-│   └── deploy.sh
-├── backend/
-├── frontend/
-├── docs/
-└── README.md
+.
+├── aleo-contracts/         Aleo program workspace and deployment scripts
+├── backend/                Express + Prisma API
+├── docs/                   Architecture, security, storage, and compliance docs
+├── frontend/               Next.js application
+├── .github/                GitHub configuration
+└── README.md               Project overview
 ```
+
+Notable backend route groups include:
+
+- `/api/discover`
+- `/api/content`
+- `/api/media`
+- `/api/subscriptions`
+- `/api/sessions`
+- `/api/livestreams`
+- `/api/live-comments`
+- `/api/tips`
+- `/api/wallet`
+
+Notable frontend application areas include:
+
+- `/discover`
+- `/library`
+- `/membership`
+- `/activity`
+- `/creator/[creatorId]`
+- `/content/[contentId]`
+- `/creator-studio/*`
+
+## Technology Stack
+
+### Frontend
+
+- Next.js 15
+- React 18
+- TypeScript
+- Provable wallet adapters and Aleo SDK libraries
+- Amazon IVS web player packages for live playback
+
+### Backend
+
+- Node.js
+- Express
+- TypeScript
+- Prisma
+- PostgreSQL
+- AWS SDK
+- Zod
+- Pino
+
+### Blockchain / Privacy
+
+- Aleo / Leo contracts
+- Wallet-driven proof and payment flows
+- Private subscription and PPV verification paths
+- Anonymous session registration and wallet-bound access semantics
 
 ## Getting Started
 
 ### Prerequisites
 
-- Node.js 22+
-- Leo (Aleo) toolchain
-- Postgres
-- AWS S3 credentials for media storage (recommended)
-- Aleo wallet for testnet interaction
+- Node.js 22 or newer recommended
+- npm
+- PostgreSQL
+- Access to an S3-compatible bucket for media delivery
+- Aleo wallet for client testing
+- Leo toolchain if you need to build or deploy contracts
 
-### 1. Contracts
+### 1. Install Dependencies
 
-```bash
-cd aleo-contracts/subscription && leo build
-cd ../ppv && leo build
-cd ../creator_registry && leo build
-```
-
-### 2. Backend
+Backend:
 
 ```bash
 cd backend
 npm install
-npm run db:generate
-npm run dev
 ```
 
-Create `backend/.env` based on `backend/.env.example` and set the required values for:
-
-- Database: `DATABASE_URL`
-- Sessions and crypto: `SESSION_SECRET`, `MASTER_KEY_BASE64`
-- Storage: `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_BUCKET_NAME`
-- Aleo: `ALEO_NETWORK`, `ALEO_ENDPOINT`, program IDs for contracts
-
-### 3. Frontend
+Frontend:
 
 ```bash
 cd frontend
 npm install
+```
+
+### 2. Create Environment Files
+
+Use only the example files as templates:
+
+- `backend/.env.example`
+- `frontend/.env.example`
+
+Do not commit real `.env` files or secret values.
+
+### 3. Prepare The Database
+
+From `backend/`:
+
+```bash
+npm run db:generate
+npm run db:push
+```
+
+If you are using Prisma migrations in local development instead of direct schema push:
+
+```bash
+npm run db:migrate
+```
+
+### 4. Start The Backend
+
+From `backend/`:
+
+```bash
 npm run dev
 ```
 
-Create `frontend/.env` based on `frontend/.env.example` and set:
+The API listens on the port configured by `PORT` in the backend environment.
 
-- `NEXT_PUBLIC_API_BASE`
-- `NEXT_PUBLIC_ALEO_NETWORK`
-- `NEXT_PUBLIC_ALEO_EXPLORER_API`
-- Contract program IDs used by the UI
+### 5. Start The Frontend
 
-## Contract Deployment
+From `frontend/`:
 
-Deploy scripts compile and deploy programs sequentially:
+```bash
+npm run dev
+```
+
+By default, the frontend resolves browser API calls through its `/api` proxy and uses `API_PROXY_BASE` or `NEXT_PUBLIC_API_BASE` on the server side.
+
+### 6. Build Contracts When Needed
+
+If you are working on Aleo programs:
 
 ```bash
 cd aleo-contracts
-bash deploy.sh
+./build_contracts.sh
 ```
 
-Required environment variables:
+PowerShell deployment helpers are also present in `aleo-contracts/`.
 
-- `PRIVATE_KEY`
-- `NETWORK` (default `testnet`)
-- `ENDPOINT`
+## Environment Configuration
 
-On Windows PowerShell:
+The backend validates environment variables eagerly with Zod on startup. Populate every required field from `backend/.env.example` before launching the API.
 
-```powershell
-.\aleo-contracts\deploy.ps1 -Network testnet -Programs payment_proof
-```
+### Backend Configuration Areas
 
-After deployment, update program IDs in your backend and frontend environment configuration. Avoid hardcoding program IDs in source.
+- Application runtime
+  - `PORT`
+  - `NODE_ENV`
+  - `CORS_ORIGINS`
+  - `TRUST_PROXY`
 
-### Testnet Deployment Tx IDs
+- Session and security
+  - `SESSION_SECRET`
+  - `SESSION_TTL_SECONDS`
+  - `FINGERPRINT_SESSION_TTL_SECONDS`
+  - `STREAM_TTL_SECONDS`
+  - `SIGNED_URL_EXPIRATION`
+  - `MASTER_KEY_BASE64`
 
-- `creator_reg_v3_xwnxp.aleo` deploy tx: `at1nkh4208908p5uejuy0fgn90lr6qvfn5qmhnza0y9gn4xetaew59qk2eepz`
-- `sub_pay_v4_xwnxp.aleo` deploy tx: `at14avc0pl753qy996csyfc3c0h6utph2u4vsc2flcd4qlepp93x58qcj4t4s`
-- `ppv_pay_v3_xwnxp.aleo` deploy tx: `at1mwquggmtf5fqhl0q749wjvd9jrfp3ecpe522q26j7pf6c5r0uq9s40drxv`
-- `access_pass_v2_xwnxp.aleo` deploy tx: `at1t7aes4wh2vdn0pdse7sgxxstwqgve9w9ffnu9gvhfycs3tv7tq9q8c634h`
-- `tip_pay_v2_xwnxp.aleo` deploy tx: `at1f2q0a4vt6py39ljaum0nglhrjayf374j4dakvfzq02x4r96kau9q32km4n`
-- `sub_invoice_v3_xwnxp.aleo` deploy tx: `at1uw3zynjzewuqj8a8p0p9rzjxuufp6af7px6jljqpj6y3hp2uwcys2vldnp`
+- Database
+  - `DATABASE_URL`
+  - `DB_CONNECT_TIMEOUT_SECONDS`
 
-## Security and Privacy
+- Media and infrastructure
+  - `STORAGE_PROVIDER`
+  - `STORAGE_LOCAL_DIR`
+  - `AWS_REGION`
+  - `AWS_ACCESS_KEY_ID`
+  - `AWS_SECRET_ACCESS_KEY`
+  - `S3_BUCKET_NAME`
+  - optional S3-compatible overrides such as `S3_ENDPOINT`
 
-- Ownership records are private Aleo records; no public subscriber lists.
-- The backend never exposes master keys to clients.
-- Session tokens are short-lived and wallet-hash bound.
-- Media is stored in a private bucket and served via expiring signed URLs.
-- Watermarking discourages and traces leaks.
+- Livestream
+  - `IVS_REGION`
+  - `IVS_TOKEN_TTL_SECONDS`
+  - optional IVS channel and stream-key settings
 
-See the security model and storage design for details:
+- Aleo integration
+  - `ALEO_NETWORK`
+  - `ALEO_ENDPOINT`
+  - contract program ID variables
+  - optional signer fields such as `ALEO_PRIVATE_KEY`
 
-- `docs/security/model.md`
-- `docs/architecture/storage.md`
+### Frontend Configuration Areas
+
+- API routing
+  - `API_PROXY_BASE`
+  - `NEXT_PUBLIC_API_BASE`
+
+- Aleo / network behavior
+  - `NEXT_PUBLIC_ALEO_NETWORK`
+  - `NEXT_PUBLIC_ALEO_EXPLORER_API`
+
+- Fee and contract references
+  - execution fee settings
+  - program ID settings used by the UI
+
+Recommended practice:
+
+- Store production secrets in your deployment platform secret manager
+- Keep frontend public env values limited to non-secret configuration
+- Rotate any leaked secret immediately instead of editing history manually
+
+## Available Scripts
+
+### Backend
+
+From `backend/`:
+
+| Command | Purpose |
+|---|---|
+| `npm run dev` | Run the API in watch mode via `tsx` |
+| `npm run build` | Compile TypeScript into `dist/` |
+| `npm run start` | Run the compiled API |
+| `npm run typecheck` | Run TypeScript checks without emitting output |
+| `npm run db:generate` | Generate Prisma client |
+| `npm run db:migrate` | Run Prisma development migrations |
+| `npm run db:push` | Push schema directly to the database |
+| `npm run db:studio` | Open Prisma Studio |
+| `npm run media:migrate:s3` | Migrate local content to S3 |
+| `npm run db:migrate:rds` | Helper for database migration to RDS |
+
+### Frontend
+
+From `frontend/`:
+
+| Command | Purpose |
+|---|---|
+| `npm run dev` | Start the Next.js development server |
+| `npm run build` | Produce a production build |
+| `npm run start` | Run the production build |
+| `npm run lint` | Run frontend linting |
+
+## Production Deployment Notes
+
+This repository does not require Docker and does not currently document a container-based deployment path.
+
+Typical production topology:
+
+- **Frontend**  
+  Deploy the Next.js app to Vercel or another Node-capable hosting platform.
+
+- **Backend**  
+  Deploy the Express service to your preferred Node runtime with access to PostgreSQL, S3-compatible storage, and optional IVS resources.
+
+- **Database**  
+  Use managed PostgreSQL where possible.
+
+- **Object storage**  
+  Use a private bucket. Do not expose raw media objects publicly.
+
+- **Contracts**  
+  Deploy Aleo programs separately, then update backend and frontend environment configuration with the correct program identifiers.
+
+Production checklist:
+
+- Enable HTTPS on all public surfaces
+- Set strict, environment-specific CORS origins
+- Use strong session secrets and encryption keys
+- Store secrets in a dedicated secret manager
+- Keep media buckets private
+- Run `npm run build` for both backend and frontend before release
+- Validate `/api/health` after backend deployment
+- Confirm contract IDs in both frontend and backend configuration after contract changes
+
+## Security Notes
+
+This README intentionally excludes:
+
+- private keys
+- cloud credentials
+- session secrets
+- encryption material
+- production hostnames not already public through the app
+- deployment transaction IDs
+- infrastructure instance identifiers
+
+Additional security guidance:
+
+- Never commit `.env`, `.env.local`, or secret export files
+- Treat wallet signing keys and backend encryption keys as high sensitivity
+- Limit admin credentials and IVS credentials to the minimum required scope
+- Prefer same-origin media delivery and short-lived access tokens for protected playback
 
 ## Documentation
 
-- System architecture: `docs/architecture/system.md`
-- Storage design: `docs/architecture/storage.md`
-- Age verification: `docs/compliance/age-verification.md`
-- Project tree: `docs/architecture/project-tree.md`
+Detailed internal documentation lives in `docs/`:
 
-## Notes on Secrets
+- [Architecture Overview](./docs/ARCHITECTURE.md)
+- [System Architecture](./docs/architecture/system.md)
+- [Storage Design](./docs/architecture/storage.md)
+- [Project Tree](./docs/architecture/project-tree.md)
+- [Security Model](./docs/security/model.md)
+- [Age Verification Notes](./docs/compliance/age-verification.md)
 
-This repository does not include sensitive credentials. All secrets should live in environment files or secret managers and must never be committed.
+## Current Development Notes
+
+- The repository contains both application code and contract sources
+- Frontend and backend are versioned together in one monorepo-style workspace
+- There is no dedicated automated test suite defined at the root today; validation is currently centered around type checks, production builds, and targeted manual verification
+
+If you are contributing, keep commits scoped by concern and avoid bundling infrastructure, contract, frontend, and backend changes together unless they must ship atomically.
