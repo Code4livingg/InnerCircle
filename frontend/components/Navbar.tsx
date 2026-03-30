@@ -103,7 +103,7 @@ export function Navbar() {
             <div className="nb__inner">
 
                 {/* ── LEFT: Logo ── */}
-                <Link href="/home" className="nb__logo" aria-label="InnerCircle home">
+                <Link href="/discover" className="nb__logo" aria-label="InnerCircle home">
                     <div className="nb__logo-orb" aria-hidden="true">
                         <span className="nb__logo-letters">IC</span>
                         <div className="nb__logo-pulse" />
