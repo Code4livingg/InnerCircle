@@ -13,6 +13,12 @@ import {
   describeSubscriptionPaymentRoute,
   formatMicrocreditsAsCredits,
   payAndSubscribe,
+  readSubscriptionInvoiceReceipt,
+  recoverLatestSubscriptionInvoiceReceipt,
+  storeSubscriptionInvoiceReceipt,
+  generateSubscriptionProof,
+  SubscriptionTranscriptUnavailableError,
+  type SubscriptionInvoiceReceipt,
   type SubscriptionPaymentAsset,
   type SubscriptionPaymentVisibility,
   type SubscriptionPaymentRoute,
@@ -179,6 +185,25 @@ const estimateIsoFromExpiryBlock = async (expiresAtBlock: number): Promise<strin
 
 const isAleoAddress = (value: string | null | undefined): value is string =>
   typeof value === "string" && /^aleo1[0-9a-z]{20,}$/i.test(value.trim());
+
+const normalizeWalletAddress = (value: string | null | undefined): string | null =>
+  isAleoAddress(value) ? value.trim().toLowerCase() : null;
+
+const receiptBelongsToWallet = (
+  receipt: SubscriptionInvoiceReceipt | null,
+  circleId: string,
+  walletAddress: string | null | undefined,
+): receipt is SubscriptionInvoiceReceipt => {
+  const normalizedWalletAddress = normalizeWalletAddress(walletAddress);
+  if (!receipt || !normalizedWalletAddress) {
+    return false;
+  }
+
+  return (
+    receipt.circleId.trim().replace(/field$/i, "") === circleId.trim().replace(/field$/i, "") &&
+    normalizeWalletAddress(receipt.owner) === normalizedWalletAddress
+  );
+};
 
 const isShieldWalletAdapter = (wallet: ReturnType<typeof useWallet>): boolean =>
   String(wallet.wallet?.adapter?.name ?? "").toLowerCase().includes("shield");
@@ -665,7 +690,7 @@ export default function CreatorPage({ params }: CreatorPageProps) {
       };
 
       const syncToBackend = async (
-        paymentTxId: string,
+        paymentTxId: string | null,
         verifyTxId: string,
         proof: SubscriptionExecutionProof | null,
         nullifier: string,
@@ -697,7 +722,7 @@ export default function CreatorPage({ params }: CreatorPageProps) {
                 nullifier,
                 circleId: creator.creatorFieldId,
                 tierId: selectedTier?.id,
-                paymentTxId,
+                paymentTxId: paymentTxId ?? verifyTxId,
               },
               walletToken,
             );
@@ -712,7 +737,7 @@ export default function CreatorPage({ params }: CreatorPageProps) {
           const activated = await activateSubscription(
             {
               txId: verifyTxId,
-              paymentTxId,
+              paymentTxId: paymentTxId ?? undefined,
               circleId: creator.creatorFieldId,
               nullifier,
               tierId: selectedTier?.id,
@@ -732,10 +757,111 @@ export default function CreatorPage({ params }: CreatorPageProps) {
         return runWithSubscriptionSyncRetry(attemptSync);
       };
 
+      const resumeStoredSubscriptionAttempt = async (): Promise<{
+        paymentTxId: string | null;
+        verifyTxId: string;
+        route: SubscriptionPaymentRoute;
+        proof: SubscriptionExecutionProof | null;
+        nullifier: string;
+        tier: number;
+        expiresAtBlock: number;
+      } | null> => {
+        await ensureSignerUnchanged();
+
+        const circleId = creator.creatorFieldId;
+        const storedReceipt = readSubscriptionInvoiceReceipt(circleId);
+        let receipt = receiptBelongsToWallet(storedReceipt, circleId, signerAddress) ? storedReceipt : null;
+        let recoverError: Error | null = null;
+
+        if (!receipt) {
+          setSubscribeProgressLabel("Checking wallet for an existing subscription invoice...");
+          try {
+            const recoveredReceipt = await recoverLatestSubscriptionInvoiceReceipt(wallet, circleId);
+            if (receiptBelongsToWallet(recoveredReceipt, circleId, signerAddress)) {
+              receipt = recoveredReceipt;
+            }
+          } catch (error) {
+            recoverError = error as Error;
+          }
+        }
+
+        if (!receipt) {
+          if (recoverError) {
+            throw recoverError;
+          }
+          return null;
+        }
+
+        const route = receipt.paymentRoute ?? "private_record";
+        storeSubscriptionInvoiceReceipt(circleId, receipt);
+        setSubscribeRoute(route);
+        setSubscriptionProgressStep(5);
+        setSubscribeProgressLabel("Existing on-chain subscription invoice found. Resuming verification...");
+        if (receipt.transactionId) {
+          latestPaymentTxIdRef.current = receipt.transactionId;
+          setSubscribeTxId(receipt.transactionId);
+        }
+
+        try {
+          const verification = await generateSubscriptionProof(wallet, receipt, circleId, {
+            signerAddress,
+            onStatus: (stage, verifyTransactionId) => {
+              setSubscriptionProgressStep(5);
+              if (verifyTransactionId) {
+                latestVerifyTxIdRef.current = verifyTransactionId;
+                setSubscribeTxId(receipt.transactionId ?? verifyTransactionId);
+              }
+
+              switch (stage) {
+                case "accepted":
+                  setSubscribeProgressLabel("Transaction accepted by wallet.");
+                  break;
+                case "waiting_finality":
+                  setSubscribeProgressLabel("Waiting for Aleo finality (30-90s)...");
+                  break;
+                case "fetching_proof":
+                  setSubscribeProgressLabel("Retrieving execution proof...");
+                  break;
+                default:
+                  break;
+              }
+            },
+          });
+
+          latestVerifyTxIdRef.current = verification.transactionId;
+          return {
+            paymentTxId: receipt.transactionId ?? null,
+            verifyTxId: verification.transactionId,
+            route,
+            proof: verification.proof,
+            nullifier: receipt.nullifier,
+            tier: receipt.tier,
+            expiresAtBlock: receipt.expiresAt,
+          };
+        } catch (error) {
+          if (!(error instanceof SubscriptionTranscriptUnavailableError)) {
+            throw error;
+          }
+
+          latestVerifyTxIdRef.current = error.transactionId;
+          setSubscribeTxId(receipt.transactionId ?? error.transactionId);
+          setSubscribeProgressLabel("Wallet transcript API unavailable. Finalizing with on-chain tx verification...");
+          return {
+            paymentTxId: receipt.transactionId ?? null,
+            verifyTxId: error.transactionId,
+            route,
+            proof: null,
+            nullifier: receipt.nullifier,
+            tier: receipt.tier,
+            expiresAtBlock: receipt.expiresAt,
+          };
+        }
+      };
+
       const runSubscriptionAttempt = async (
         feePreference: FeePreference,
       ): Promise<{
-        paymentTxId: string;
+        paymentTxId: string | null;
         verifyTxId: string;
         route: SubscriptionPaymentRoute;
         proof: SubscriptionExecutionProof | null;
@@ -820,7 +946,7 @@ export default function CreatorPage({ params }: CreatorPageProps) {
 
       const isShieldWallet = isShieldWalletAdapter(wallet);
       let result: {
-        paymentTxId: string;
+        paymentTxId: string | null;
         verifyTxId: string;
         route: SubscriptionPaymentRoute;
         proof: SubscriptionExecutionProof | null;
@@ -830,7 +956,7 @@ export default function CreatorPage({ params }: CreatorPageProps) {
       };
 
       try {
-        result = await runSubscriptionAttempt("auto");
+        result = (await resumeStoredSubscriptionAttempt()) ?? await runSubscriptionAttempt("auto");
       } catch (error) {
         const message = (error as Error).message ?? "";
         const shouldRetryShieldWithAlternateFee =
@@ -851,6 +977,7 @@ export default function CreatorPage({ params }: CreatorPageProps) {
       }
 
       await ensureSignerUnchanged();
+      setSubscribeRoute(result.route);
       setSubscribeProgressLabel("Syncing subscription with backend...");
       const syncedSubscription = await syncToBackend(
         result.paymentTxId,
@@ -861,7 +988,7 @@ export default function CreatorPage({ params }: CreatorPageProps) {
         result.tier,
         result.expiresAtBlock,
       );
-      setSubscribeTxId(result.paymentTxId);
+      setSubscribeTxId(result.paymentTxId ?? result.verifyTxId);
       setHasSubscription(true);
       setSubscriptionActiveUntil(syncedSubscription.expiresAt);
       setSubscriptionTierName(syncedSubscription.tierName ?? selectedTier?.tierName ?? null);
@@ -906,16 +1033,16 @@ export default function CreatorPage({ params }: CreatorPageProps) {
         console.warn("[InnerCircle] stale private record detected; ask Shield to refresh records before retry.");
       }
 
-      const txAlreadySubmitted = Boolean(latestPaymentTxIdRef.current);
+      const txAlreadySubmitted = Boolean(latestPaymentTxIdRef.current || latestVerifyTxIdRef.current);
       const message = /timed out waiting|timeout/i.test(rawMessage)
-        ? "Transaction is taking longer than usual. Check your activity in Shield — your subscription may still activate."
+        ? "Transaction is taking longer than usual. Check your activity in Shield, then press Subscribe again to resume without paying twice."
         : txAlreadySubmitted
-          ? "Subscription transaction is already on-chain. Backend sync is still catching up."
+          ? "A subscription transaction was already accepted on-chain. Press Subscribe again to resume verification without paying twice."
           : formatWalletError(rawMessage);
       setSubscribeError(message);
       setSubscribeProgressLabel(null);
-      setSubscriptionProgressStep(txAlreadySubmitted ? 4 : 0);
-      setSubscribeState(txAlreadySubmitted ? "verifying" : "idle");
+      setSubscriptionProgressStep(txAlreadySubmitted ? 5 : 0);
+      setSubscribeState("idle");
     }
     finally {
       processingRef.current = false;
