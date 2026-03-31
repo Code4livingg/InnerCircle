@@ -1,6 +1,7 @@
 import { Network, type TransactionOptions } from "@provablehq/aleo-types";
 import type { WalletContextState } from "@/lib/walletContext";
 import { fetchPublicBalance } from "./api";
+import { CREDITS_PROGRAM_ID, CREATOR_REGISTRY_PROGRAM_ID, PAYMENT_PROOF_PROGRAM_ID, SUBSCRIPTION_PROGRAM_ID, TIP_PROGRAM_ID, uniqueProgramIds } from "./programIds";
 
 const MICROCREDITS_PER_ALEO = 1_000_000n;
 const DEFAULT_EXECUTION_FEE_ALEO = 0.25;
@@ -9,11 +10,6 @@ const ALEO_EXPLORER_API =
   process.env.NEXT_PUBLIC_ALEO_EXPLORER_API?.trim() ||
   "https://api.explorer.provable.com/v1";
 const ALEO_EXPLORER_NETWORK = "testnet";
-const TIP_PROGRAM_ID = process.env.NEXT_PUBLIC_TIP_PROGRAM_ID?.trim() || "tip_pay_v5_xwnxp.aleo";
-const PAYMENT_PROOF_PROGRAM_ID =
-  process.env.NEXT_PUBLIC_PAYMENT_PROOF_PROGRAM_ID?.trim() || "sub_invoice_v8_xwnxp.aleo";
-const SUBSCRIPTION_PROGRAM_ID =
-  process.env.NEXT_PUBLIC_SUBSCRIPTION_PROGRAM_ID?.trim() || "sub_pay_v6_xwnxp.aleo";
 
 interface TransactionResult {
   transactionId?: string;
@@ -2137,21 +2133,11 @@ const pickResolvedTxId = (
   return undefined;
 };
 
-const uniqueStrings = (values: string[]): string[] => {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const value of values) {
-    const normalized = value.trim();
-    if (!normalized || seen.has(normalized)) continue;
-    seen.add(normalized);
-    out.push(normalized);
-  }
-  return out;
-};
+const uniqueStrings = (values: string[]): string[] => uniqueProgramIds(values);
 
 const DEFAULT_HISTORY_PROGRAM_IDS = uniqueStrings([
-  "credits.aleo",
-  "creator_reg_v5_xwnxp.aleo",
+  CREDITS_PROGRAM_ID,
+  CREATOR_REGISTRY_PROGRAM_ID,
   PAYMENT_PROOF_PROGRAM_ID,
   SUBSCRIPTION_PROGRAM_ID,
   TIP_PROGRAM_ID,

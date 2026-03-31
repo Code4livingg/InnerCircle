@@ -51,6 +51,7 @@ import {
   type FeePreference,
   waitForOnChainTransactionId,
 } from "../../../lib/aleoTransactions";
+import { CREDITS_PROGRAM_ID, TIP_PROGRAM_ID } from "@/lib/programIds";
 import { LockedContentCard } from "../../../components/LockedContentCard";
 
 interface CreatorPageProps {
@@ -59,9 +60,6 @@ interface CreatorPageProps {
 
 type SubscribeState = "idle" | "wallet" | "verifying" | "success";
 type SubscriptionProgressStep = 0 | 1 | 2 | 3 | 4 | 5 | 6;
-
-const CREDITS_PROGRAM_ID = "credits.aleo";
-const TIP_PROGRAM_ID = process.env.NEXT_PUBLIC_TIP_PROGRAM_ID?.trim() || "tip_pay_v5_xwnxp.aleo";
 
 const wait = (ms: number): Promise<void> =>
   new Promise((resolve) => {

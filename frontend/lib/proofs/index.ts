@@ -2,6 +2,7 @@ import type { WalletContextState } from "@/lib/walletContext";
 import { sha256Hex } from "@/lib/crypto/hash";
 import type { SubscriptionExecutionProof } from "@/lib/api";
 import { verifyStoredPaymentProof } from "@/lib/api";
+import { PAYMENT_PROOF_PROGRAM_ID, USDCX_PROGRAM_ID } from "@/lib/programIds";
 import {
   executeProgramTransaction,
   fetchKnownPublicBalanceMicrocredits,
@@ -18,10 +19,6 @@ const PENDING_SUBSCRIPTION_PREFIX = "innercircle_pending_subscription_v1:";
 const PENDING_SUBSCRIPTION_PROOF_PREFIX = "innercircle_pending_subscription_proof_v1:";
 const PENDING_PROOF_KEY = (contentId: string): string => `ic_pending_proof_${contentId}`;
 const DONE_PROOF_KEY = (contentId: string): string => `ic_done_proof_${contentId}`;
-const PAYMENT_PROOF_PROGRAM_ID =
-  process.env.NEXT_PUBLIC_PAYMENT_PROOF_PROGRAM_ID?.trim() || "sub_invoice_v8_xwnxp.aleo";
-const USDCX_PROGRAM_ID =
-  process.env.NEXT_PUBLIC_USDCX_PROGRAM_ID?.trim() || "test_usdcx_stablecoin.aleo";
 const IS_LEGACY_PAYMENT_PROOF_PROGRAM = /^sub_invoice_v2_xwnxp\.aleo$/i.test(PAYMENT_PROOF_PROGRAM_ID);
 const ALEO_EXPLORER_API =
   process.env.NEXT_PUBLIC_ALEO_API?.trim() ||
